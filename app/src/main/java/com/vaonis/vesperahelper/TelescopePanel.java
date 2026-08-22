@@ -92,6 +92,7 @@ final class TelescopePanel {
     private boolean sawPhotoSyncing;
     /** Cursor used by {@link #addStatusRow} to update statusBox children in place. */
     private int statusRowCursor;
+    private final TelescopeStatusHub.Listener statusListener = this::onTelescopeStatusEvent;
     private final BroadcastReceiver photoStatusReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (intent == null) return;
@@ -171,6 +172,7 @@ final class TelescopePanel {
         layout.addView(portInventory);
         scroll.addView(layout);
         updateObservationButtons(false);
+        TelescopeStatusHub.ensure().addListener(statusListener);
     }
 
     View view() {
@@ -254,6 +256,8 @@ final class TelescopePanel {
 
     void shutdown() {
         visible = false;
+        TelescopeStatusHub hub = TelescopeStatusHub.get();
+        if (hub != null) hub.removeListener(statusListener);
         unregisterPhotoStatus();
         stopLive();
         mainHandler.removeCallbacks(autoRefresh);
@@ -328,7 +332,7 @@ final class TelescopePanel {
     private void applyLiveSnapshot(VesperaStatusSnapshot snapshot) {
         if (snapshot == null) return;
         rememberBattery(snapshot);
-        maybeShowPowerWarning(snapshot);
+        TelescopeStatusHub.ensure().ingestSnapshot(snapshot);
         if (!visible) return;
         liveOk = true;
         setCommandsEnabled(true);
@@ -370,7 +374,7 @@ final class TelescopePanel {
                 if (visible) refreshStatus.setEnabled(isConnected());
                 if (result.snapshot != null) {
                     rememberBattery(result.snapshot);
-                    maybeShowPowerWarning(result.snapshot);
+                    TelescopeStatusHub.ensure().ingestSnapshot(result.snapshot);
                 }
                 if (!visible) {
                     if (result.snapshot != null) lastSnap = result.snapshot;
@@ -397,7 +401,6 @@ final class TelescopePanel {
         maybeProbePhotoUsage(snap);
         refillStatusKeepingScroll();
         if (updated != null) lastUpdate.setText(updated);
-        maybeSyncIfStorageFull(snap);
     }
 
     private void refillStatusKeepingScroll() {
@@ -569,23 +572,28 @@ final class TelescopePanel {
         storageWorker.execute(() -> {
             VesperaInternalStorage.Usage usage = VesperaInternalStorage.probe(
                     network, fetchHost, fetchPort, model);
+            if (usage != null) {
+                TelescopeStatusHub.ensure().ingestInternalStorage(usage.usedPercent);
+            }
             mainHandler.post(() -> {
                 photoUsageInFlight.set(false);
                 photoUsageChecking = false;
                 if (usage != null) photoUsage = usage;
                 if (!visible || lastSnap == null) return;
                 refillStatusKeepingScroll();
-                maybeSyncIfStorageFull(lastSnap);
             });
         });
     }
 
-    private void maybeSyncIfStorageFull(VesperaStatusSnapshot snap) {
-        if (!SystemSettingsStore.from(activity).storageSync()) return;
-        int percent = photoUsage != null ? photoUsage.usedPercent
-                : (snap == null ? -1 : snap.storageUsedPercent);
-        if (percent < PhotoSyncService.STORAGE_SYNC_PERCENT) return;
-        PhotoSyncService.syncIfStorageHigh(activity, percent);
+    private void onTelescopeStatusEvent(TelescopeStatusEvent event) {
+        if (event == null) return;
+        if (event.kind == TelescopeStatusEvent.Kind.POWER_OFF_MAINS
+                || event.kind == TelescopeStatusEvent.Kind.POWER_ON_MAINS) {
+            VesperaStatusSnapshot snap = event.snapshot != null ? event.snapshot : lastSnap;
+            mainHandler.post(() -> {
+                if (snap != null) maybeShowPowerWarning(snap);
+            });
+        }
     }
 
     private String observationLabel(VesperaStatusSnapshot snap) {
@@ -698,7 +706,7 @@ final class TelescopePanel {
             VesperaLocationClient.Site initSite = null;
             boolean needsSite = command == VesperaCommandClient.Command.INIT
                     || (command == VesperaCommandClient.Command.RESUME
-                    && (snap == null || !snap.initialized));
+                    && (snap == null || !VesperaCommandClient.readyToResumeAfterInit(snap)));
             if (needsSite) {
                 initSite = resolveInitSite(network, snap);
                 if (initSite == null) {
@@ -712,7 +720,7 @@ final class TelescopePanel {
                 }
             }
             if (command == VesperaCommandClient.Command.RESUME
-                    && (snap == null || !snap.initialized)) {
+                    && (snap == null || !VesperaCommandClient.readyToResumeAfterInit(snap))) {
                 mainHandler.post(() -> commandResult.setText(
                         activity.getString(R.string.telescope_command_resume_initing)));
             }
@@ -726,6 +734,7 @@ final class TelescopePanel {
                     if (command == VesperaCommandClient.Command.SHUTDOWN) {
                         commandResult.setText(activity.getString(
                                 R.string.telescope_command_shutdown_ok));
+                        TelescopeStatusHub.ensure().ingestShutdown();
                     } else {
                         commandResult.setText(activity.getString(
                                 R.string.telescope_command_ok, label(command), result.message));
@@ -847,7 +856,7 @@ final class TelescopePanel {
                 message = activity.getString(R.string.telescope_confirm_init);
             }
         } else if (command == VesperaCommandClient.Command.RESUME
-                && (lastSnap == null || !lastSnap.initialized)) {
+                && (lastSnap == null || !VesperaCommandClient.readyToResumeAfterInit(lastSnap))) {
             message = activity.getString(R.string.telescope_confirm_resume_with_init);
         } else {
             message = activity.getString(confirmMessage(command));

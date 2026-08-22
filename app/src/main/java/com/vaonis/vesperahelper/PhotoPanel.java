@@ -80,6 +80,7 @@ final class PhotoPanel {
     private boolean diskWarningIgnoredThisVisit;
     private boolean diskWarningAccepted;
     private DaemonDisk.Space hdSpace = DaemonDisk.Space.unknown();
+    private final TelescopeStatusHub.Listener statusListener = this::onTelescopeStatusEvent;
 
     PhotoPanel(Activity activity, float density, int padding) {
         this.activity = activity;
@@ -340,6 +341,7 @@ final class PhotoPanel {
         refreshOverlayRow();
         refreshUserFolderHint();
         refreshCopyButtons(false);
+        TelescopeStatusHub.ensure().addListener(statusListener);
     }
 
     void refreshUserFolderHint() {
@@ -385,6 +387,12 @@ final class PhotoPanel {
         if (!receiverRegistered) return;
         activity.unregisterReceiver(statusReceiver);
         receiverRegistered = false;
+    }
+
+    void shutdown() {
+        TelescopeStatusHub hub = TelescopeStatusHub.get();
+        if (hub != null) hub.removeListener(statusListener);
+        onPause();
     }
 
     private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
@@ -772,6 +780,9 @@ final class PhotoPanel {
 
     private void refreshHdSpace() {
         hdSpace = DaemonDisk.photosSpace(activity);
+        if (hdSpace.known) {
+            TelescopeStatusHub.ensure().ingestHd(hdSpace.usedPercent);
+        }
         if (hdSpace.known && hdSpace.usedPercent < PhotoSyncService.HD_WARNING_PERCENT) {
             diskWarningAccepted = false;
             dismissDiskWarning(true);
@@ -813,6 +824,14 @@ final class PhotoPanel {
         dialog.setOnDismissListener(d -> scroll.restoreTo(x, y));
         dialog.show();
         UiStyle.styleAlertButtons(dialog);
+    }
+
+    private void onTelescopeStatusEvent(TelescopeStatusEvent event) {
+        if (event == null || event.kind != TelescopeStatusEvent.Kind.HD_HIGH) return;
+        mainHandler.post(() -> {
+            refreshHdSpace();
+            maybeShowDiskWarning();
+        });
     }
 
     private void dismissDiskWarning(boolean resetIgnore) {

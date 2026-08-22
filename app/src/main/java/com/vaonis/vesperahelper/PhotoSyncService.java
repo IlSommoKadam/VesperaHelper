@@ -140,6 +140,9 @@ public final class PhotoSyncService extends Service {
     private volatile boolean vesperaWasConnected;
     private boolean connectionReceiverRegistered;
     private boolean clockReceiverRegistered;
+    private TelescopeStatusHub statusHub;
+    private TelegramNotifier telegramNotifier;
+    private final TelescopeStatusHub.Listener statusListener = this::onTelescopeStatusEvent;
     private final BroadcastReceiver connectionReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String status = intent.getStringExtra(VesperaConnectionService.EXTRA_STATUS);
@@ -147,6 +150,7 @@ public final class PhotoSyncService extends Service {
                 extraAutoDelayMs = 0;
                 boolean becameConnected = !vesperaWasConnected;
                 vesperaWasConnected = true;
+                TelescopeStatusHub.ensure().ingestConnection(true);
                 worker.execute(() -> {
                     // Remount only when the instrument answers — SSID alone is not enough.
                     Network net = resolveVesperaNetwork();
@@ -170,6 +174,7 @@ public final class PhotoSyncService extends Service {
                 }
             } else {
                 vesperaWasConnected = false;
+                TelescopeStatusHub.ensure().ingestConnection(false);
                 worker.execute(() -> {
                     telescopeFtp.stop();
                     if (SystemSettingsStore.from(PhotoSyncService.this).hdMount()
@@ -214,6 +219,8 @@ public final class PhotoSyncService extends Service {
                     && syncStore.isAutoDue(System.currentTimeMillis())) {
                 syncExecutor.execute(() -> maybeAutoSync(false, SystemActivityLog.KIND_PHOTO_SYNC));
             }
+            pollTelescopeStatusLocked();
+            if (telegramNotifier != null) telegramNotifier.flushQueue();
         });
         mainHandler.postDelayed(this, TICK_MS);
         }
@@ -329,6 +336,14 @@ public final class PhotoSyncService extends Service {
         syncStatus = localized.getString(R.string.photos_sync_idle);
         hud = new SyncProgressHud(this);
         startAsForeground();
+        statusHub = TelescopeStatusHub.ensure();
+        telegramNotifier = new TelegramNotifier(this);
+        statusHub.addListener(statusListener);
+        statusHub.addListener(telegramNotifier);
+        if (VesperaConnectionService.STATUS_CONNECTED.equals(VesperaConnectionService.getLastStatus())) {
+            vesperaWasConnected = true;
+            statusHub.ingestConnection(true);
+        }
         if (!connectionReceiverRegistered) {
             IntentFilter filter = new IntentFilter(VesperaConnectionService.ACTION_STATUS);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1130,7 +1145,12 @@ public final class PhotoSyncService extends Service {
         int apiPort = -1;
         VesperaPortScan scan = VesperaPortScanner.lastScan();
         if (scan != null && scan.apiRestPort > 0) apiPort = scan.apiRestPort;
-        VesperaStatusSnapshot snap = VesperaStatusClient.fetch(PhotoSyncEngine.HOST, apiPort, network);
+        TelescopeStatusHub hub = TelescopeStatusHub.ensure();
+        VesperaStatusSnapshot snap = hub.lastSnapshot();
+        if (snap == null || hub.snapshotAgeMs() > 180_000L) {
+            snap = VesperaStatusClient.fetch(PhotoSyncEngine.HOST, apiPort, network);
+            if (snap != null) hub.ingestSnapshot(snap);
+        }
         if (snap == null) {
             Log.i(TAG, "sun-too-high skip: status unavailable — retry");
             retrySunTooHighSoon();
@@ -1260,6 +1280,7 @@ public final class PhotoSyncService extends Service {
                     }
                     Log.i(TAG, "shutdown after photo sync " + (telescopeOk ? "ok" : "fail")
                             + " " + describeResult(result) + " attempt=" + attempt);
+                    if (telescopeOk) TelescopeStatusHub.ensure().ingestShutdown();
                 }
             } else if (sunFlow) {
                 Log.i(TAG, "sun-too-high: telescope shutdown skipped (disabled)");
@@ -1372,6 +1393,7 @@ public final class PhotoSyncService extends Service {
         VesperaPortScan scan = VesperaPortScanner.lastScan();
         if (scan != null && scan.apiRestPort > 0) apiPort = scan.apiRestPort;
         VesperaStatusSnapshot snap = VesperaStatusClient.fetch(PhotoSyncEngine.HOST, apiPort, network);
+        if (snap != null) TelescopeStatusHub.ensure().ingestSnapshot(snap);
         if (snap == null || !snap.isTrackingAcquisition()) {
             Log.i(TAG, "internal storage skip: not tracking/acquisition");
             return;
@@ -1384,10 +1406,8 @@ public final class PhotoSyncService extends Service {
             return;
         }
         Log.i(TAG, "internal storage " + usage.label);
+        TelescopeStatusHub.ensure().ingestInternalStorage(usage.usedPercent);
         publish();
-        if (usage.usedPercent >= STORAGE_SYNC_PERCENT) {
-            syncExecutor.execute(this::maybeSyncForFullStorage);
-        }
     }
 
     /** Re-read Vespera /USER occupancy after an FTP copy/delete so Telescopio status stays current. */
@@ -1411,6 +1431,30 @@ public final class PhotoSyncService extends Service {
             return;
         }
         Log.i(TAG, "storage after FTP sync " + usage.label);
+        TelescopeStatusHub.ensure().ingestInternalStorage(usage.usedPercent);
+    }
+
+    private void pollTelescopeStatusLocked() {
+        if (!isVesperaConnected()) return;
+        Network network = resolveVesperaNetwork();
+        if (network == null) return;
+        int apiPort = -1;
+        VesperaPortScan scan = VesperaPortScanner.lastScan();
+        if (scan != null && scan.apiRestPort > 0) apiPort = scan.apiRestPort;
+        VesperaStatusSnapshot snap = VesperaStatusClient.fetch(PhotoSyncEngine.HOST, apiPort, network);
+        if (snap != null) TelescopeStatusHub.ensure().ingestSnapshot(snap);
+        DaemonDisk.Space space = DaemonDisk.photosSpace(this);
+        if (space != null && space.known) {
+            TelescopeStatusHub.ensure().ingestHd(space.usedPercent);
+        }
+    }
+
+    private void onTelescopeStatusEvent(TelescopeStatusEvent event) {
+        if (event == null) return;
+        if (event.kind == TelescopeStatusEvent.Kind.STORAGE_HIGH) {
+            if (!SystemSettingsStore.from(this).storageSync()) return;
+            syncExecutor.execute(this::maybeSyncForFullStorage);
+        }
     }
 
     private void maybeSyncForFullStorage() {
@@ -2133,6 +2177,10 @@ public final class PhotoSyncService extends Service {
         }
         ftpServer.stop();
         telescopeFtp.stop();
+        if (statusHub != null) {
+            statusHub.removeListener(statusListener);
+            if (telegramNotifier != null) statusHub.removeListener(telegramNotifier);
+        }
         if (hud != null) hud.hide();
         worker.shutdownNow();
         syncExecutor.shutdownNow();

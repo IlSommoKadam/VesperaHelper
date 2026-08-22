@@ -161,6 +161,103 @@ final class VesperaStatusSnapshot {
         return label != null && !label.isEmpty();
     }
 
+    /** True while {@code currentOperation} is a running AUTO_INIT. */
+    boolean isAutoInitRunning() {
+        org.json.JSONObject op = currentAutoInitOp();
+        if (op == null) return false;
+        if (op.optBoolean("stopped", false)) return false;
+        return !op.has("endTime") || op.isNull("endTime");
+    }
+
+    /**
+     * AUTO_INIT has moved to {@code previousOperations} and stopped without error.
+     * Does not require {@code initialized}: firmware can leave that flag false
+     * until after {@code startObservation}.
+     */
+    boolean isAutoInitFinishedOk() {
+        if (isAutoInitRunning()) return false;
+        org.json.JSONObject prev = previousAutoInit();
+        if (prev == null) return false;
+        if (!prev.optBoolean("stopped", false)
+                && !(prev.has("endTime") && !prev.isNull("endTime"))) {
+            return false;
+        }
+        return autoInitErrorName(prev).isEmpty();
+    }
+
+    /** AZ+ALT reported calibrated — typical after a successful auto-init. */
+    boolean azAltCalibrated() {
+        org.json.JSONObject body = statusBody();
+        org.json.JSONObject motors = body == null ? null : body.optJSONObject("motors");
+        if (motors == null) return false;
+        return motorCalibrated(motors, "AZ") && motorCalibrated(motors, "ALT");
+    }
+
+    String autoInitFailure(boolean includePrevious) {
+        String fromCurrent = autoInitErrorName(currentAutoInitOp());
+        if (!fromCurrent.isEmpty()) return fromCurrent;
+        if (!includePrevious || isAutoInitRunning()) return "";
+        return autoInitErrorName(previousAutoInit());
+    }
+
+    private org.json.JSONObject currentAutoInitOp() {
+        org.json.JSONObject body = statusBody();
+        if (body == null) return null;
+        org.json.JSONObject current = body.optJSONObject("currentOperation");
+        if (isAutoInitOp(current)) return current;
+        org.json.JSONArray others = body.optJSONArray("otherCurrentOperations");
+        if (others != null) {
+            for (int i = 0; i < others.length(); i++) {
+                org.json.JSONObject item = others.optJSONObject(i);
+                if (isAutoInitOp(item)) return item;
+            }
+        }
+        return null;
+    }
+
+    private org.json.JSONObject previousAutoInit() {
+        org.json.JSONObject body = statusBody();
+        if (body == null) return null;
+        org.json.JSONObject previous = body.optJSONObject("previousOperations");
+        if (previous == null) return null;
+        org.json.JSONObject named = previous.optJSONObject("autoInit");
+        if (isAutoInitOp(named)) return named;
+        org.json.JSONArray names = previous.names();
+        if (names == null) return null;
+        for (int i = 0; i < names.length(); i++) {
+            org.json.JSONObject item = previous.optJSONObject(names.optString(i));
+            if (isAutoInitOp(item)) return item;
+        }
+        return null;
+    }
+
+    private static boolean isAutoInitOp(org.json.JSONObject op) {
+        if (op == null) return false;
+        String type = op.optString("type", "").toUpperCase(java.util.Locale.US);
+        return type.contains("AUTO_INIT");
+    }
+
+    private static String autoInitErrorName(org.json.JSONObject op) {
+        if (op == null) return "";
+        if (!op.has("error") || op.isNull("error")) return "";
+        Object raw = op.opt("error");
+        if (raw instanceof org.json.JSONObject) {
+            org.json.JSONObject err = (org.json.JSONObject) raw;
+            String name = err.optString("name", "").trim();
+            if (!name.isEmpty()) return name;
+            String message = err.optString("message", "").trim();
+            return message.isEmpty() ? "AUTO_INIT_ERROR" : message;
+        }
+        String text = String.valueOf(raw).trim();
+        if (text.isEmpty() || "null".equalsIgnoreCase(text)) return "";
+        return text;
+    }
+
+    private static boolean motorCalibrated(org.json.JSONObject motors, String axis) {
+        org.json.JSONObject motor = motors.optJSONObject(axis);
+        return motor != null && motor.optBoolean("calibrated", false);
+    }
+
     /** Short label of the blocking operation, or empty if idle. */
     String busyLabel() {
         if (isShuttingDown()) return "";

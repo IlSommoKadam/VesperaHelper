@@ -81,15 +81,18 @@ public final class MainActivity extends Activity {
     private static final int TAB_PHOTOS = 1;
     private static final int TAB_TELESCOPE = 2;
     private static final int TAB_SYSTEM = 3;
+    private static final int TAB_TELEGRAM = 4;
 
     private Button tabWifi;
     private Button tabPhotos;
     private Button tabTelescope;
     private Button tabSystem;
+    private Button tabTelegram;
     private FixedScrollView wifiScroll;
     private TelescopePanel telescopePanel;
     private PhotoPanel photoPanel;
     private SystemPanel systemPanel;
+    private TelegramPanel telegramPanel;
     private int currentTab = TAB_WIFI;
     /** True when the saved instrument is currently seen in Wi-Fi scan. */
     private boolean savedDeviceOnline;
@@ -411,6 +414,7 @@ public final class MainActivity extends Activity {
         telescopePanel = new TelescopePanel(this, density, padding);
         photoPanel = new PhotoPanel(this, density, padding);
         systemPanel = new SystemPanel(this, density, padding);
+        telegramPanel = new TelegramPanel(this, density, padding);
 
         root.addView(header);
         root.addView(headerDivider);
@@ -419,6 +423,7 @@ public final class MainActivity extends Activity {
         root.addView(photoPanel.view());
         root.addView(telescopePanel.view());
         root.addView(systemPanel.view());
+        root.addView(telegramPanel.view());
         setContentView(root);
         showTab(TAB_WIFI);
     }
@@ -460,6 +465,11 @@ public final class MainActivity extends Activity {
         tabSystem.setGravity(Gravity.CENTER);
         tabSystem.setText(R.string.tab_system);
         tabSystem.setOnClickListener(v -> showTab(TAB_SYSTEM));
+        tabTelegram = new Button(this);
+        tabTelegram.setAllCaps(false);
+        tabTelegram.setGravity(Gravity.CENTER);
+        tabTelegram.setText(R.string.tab_telegram);
+        tabTelegram.setOnClickListener(v -> showTab(TAB_TELEGRAM));
 
         LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -473,6 +483,9 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams tabLp4 = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         tabSystem.setLayoutParams(tabLp4);
+        LinearLayout.LayoutParams tabLp5 = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tabTelegram.setLayoutParams(tabLp5);
         tabBar.addView(tabWifi);
         tabBar.addView(tabDivider(density));
         tabBar.addView(tabPhotos);
@@ -480,6 +493,8 @@ public final class MainActivity extends Activity {
         tabBar.addView(tabTelescope);
         tabBar.addView(tabDivider(density));
         tabBar.addView(tabSystem);
+        tabBar.addView(tabDivider(density));
+        tabBar.addView(tabTelegram);
         wrap.addView(tabBar);
         return wrap;
     }
@@ -506,6 +521,9 @@ public final class MainActivity extends Activity {
         if (currentTab == TAB_SYSTEM && tab != TAB_SYSTEM && systemPanel != null) {
             systemPanel.onHidden();
         }
+        if (currentTab == TAB_TELEGRAM && tab != TAB_TELEGRAM && telegramPanel != null) {
+            telegramPanel.onHidden();
+        }
         currentTab = tab;
         if (wifiScroll != null) {
             wifiScroll.setVisibility(tab == TAB_WIFI ? View.VISIBLE : View.GONE);
@@ -519,10 +537,14 @@ public final class MainActivity extends Activity {
         if (systemPanel != null) {
             systemPanel.view().setVisibility(tab == TAB_SYSTEM ? View.VISIBLE : View.GONE);
         }
+        if (telegramPanel != null) {
+            telegramPanel.view().setVisibility(tab == TAB_TELEGRAM ? View.VISIBLE : View.GONE);
+        }
         styleTab(tabWifi, tab == TAB_WIFI, true, false);
         styleTab(tabPhotos, tab == TAB_PHOTOS, false, false);
         styleTab(tabTelescope, tab == TAB_TELESCOPE, false, false);
-        styleTab(tabSystem, tab == TAB_SYSTEM, false, true);
+        styleTab(tabSystem, tab == TAB_SYSTEM, false, false);
+        styleTab(tabTelegram, tab == TAB_TELEGRAM, false, true);
         if (tab == TAB_PHOTOS && photoPanel != null) {
             photoPanel.onResume();
         } else if (tab == TAB_TELESCOPE && telescopePanel != null) {
@@ -530,6 +552,8 @@ public final class MainActivity extends Activity {
             telescopePanel.onVisible();
         } else if (tab == TAB_SYSTEM && systemPanel != null) {
             systemPanel.onVisible();
+        } else if (tab == TAB_TELEGRAM && telegramPanel != null) {
+            telegramPanel.onVisible();
         }
     }
 
@@ -1336,10 +1360,11 @@ public final class MainActivity extends Activity {
             }
         }
         if (systemPanel != null && currentTab == TAB_SYSTEM) systemPanel.onVisible();
+        if (telegramPanel != null && currentTab == TAB_TELEGRAM) telegramPanel.onVisible();
     }
 
     @Override protected void onDestroy() {
-        if (photoPanel != null) photoPanel.onPause();
+        if (photoPanel != null) photoPanel.shutdown();
         if (telescopePanel != null) telescopePanel.shutdown();
         stopWatchdog();
         if (instrumentWatchdog != null) {
@@ -1369,6 +1394,7 @@ public final class MainActivity extends Activity {
             telescopePanel.onAppPause();
         }
         if (systemPanel != null && currentTab == TAB_SYSTEM) systemPanel.onHidden();
+        if (telegramPanel != null && currentTab == TAB_TELEGRAM) telegramPanel.onHidden();
         super.onPause();
     }
 }
