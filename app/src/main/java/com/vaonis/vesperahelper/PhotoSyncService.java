@@ -86,6 +86,8 @@ public final class PhotoSyncService extends Service {
     private static final int AUTO_SYNC_ALARM_REQ = 44;
     /** HD/FTP housekeeping only — auto-sync is scheduled separately. */
     private static final long TICK_MS = 120_000;
+    /** Ignore brief Wi‑Fi flaps before spinning the HD down. */
+    private static final long HD_POWER_OFF_GRACE_MS = 45_000L;
     /** Occupied percent of Vespera internal storage (FTP /USER) that starts a photo sync. */
     static final int STORAGE_SYNC_PERCENT = 50;
     /** Occupied percent of the mounted USB HD that shows the disk warning. */
@@ -143,6 +145,7 @@ public final class PhotoSyncService extends Service {
     private TelescopeStatusHub statusHub;
     private TelegramNotifier telegramNotifier;
     private final TelescopeStatusHub.Listener statusListener = this::onTelescopeStatusEvent;
+    private final Runnable delayedHdPowerOff = () -> worker.execute(this::powerOffHdIfWifiGoneLocked);
     private final BroadcastReceiver connectionReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String status = intent.getStringExtra(VesperaConnectionService.EXTRA_STATUS);
@@ -151,19 +154,17 @@ public final class PhotoSyncService extends Service {
                 boolean becameConnected = !vesperaWasConnected;
                 vesperaWasConnected = true;
                 TelescopeStatusHub.ensure().ingestConnection(true);
+                cancelDelayedHdPowerOff();
                 worker.execute(() -> {
                     // Remount only when the instrument answers — SSID alone is not enough.
+                    // Do not spin the HD down while the Vespera AP is up: API/FTP often
+                    // lag a few seconds behind Wi‑Fi, and that used to cycle eject/mount.
                     Network net = resolveVesperaNetwork();
                     boolean instrumentUp = canReachVesperaFtp(net)
                             || InstrumentWatchdog.probeApiPort(PhotoSyncService.this, net, true) > 0;
                     if (instrumentUp && !userUnmounted) {
                         autoPoweredOff = false;
                         ensureMountedForSync();
-                    } else if (!instrumentUp
-                            && SystemSettingsStore.from(PhotoSyncService.this).hdMount()
-                            && shouldEnforceHdPowerOff()) {
-                        // AP up but telescope silent → same as offline.
-                        powerOffHdLocked(R.string.photo_hd_powered_off_offline);
                     }
                     refreshTelescopeFtpLocked();
                     publish();
@@ -179,7 +180,7 @@ public final class PhotoSyncService extends Service {
                     telescopeFtp.stop();
                     if (SystemSettingsStore.from(PhotoSyncService.this).hdMount()
                             && shouldEnforceHdPowerOff()) {
-                        powerOffHdLocked(R.string.photo_hd_powered_off_offline);
+                        scheduleHdPowerOffIfWifiGone();
                     }
                     refreshFtpStatus();
                     publish();
@@ -210,7 +211,7 @@ public final class PhotoSyncService extends Service {
         worker.execute(() -> {
             refreshClockAndSun(false);
             refreshMountStatus();
-            maybeAutoMount(); // respects autoPoweredOff + instrument check
+            maybeAutoMount(); // remounts only if the instrument API/FTP answers
             refreshTelescopeFtpLocked();
             publish();
             if (syncStore != null
@@ -594,6 +595,26 @@ public final class PhotoSyncService extends Service {
         return DaemonDisk.isPhotosBoundLive(DaemonDisk.photosDir(this));
     }
 
+    private void cancelDelayedHdPowerOff() {
+        mainHandler.removeCallbacks(delayedHdPowerOff);
+    }
+
+    /** Wait out short disconnects before ejecting — a flap used to log Spegnimento HD then remount. */
+    private void scheduleHdPowerOffIfWifiGone() {
+        if (!SystemSettingsStore.from(this).hdMount()) return;
+        if (manualHdWake) return;
+        mainHandler.removeCallbacks(delayedHdPowerOff);
+        mainHandler.postDelayed(delayedHdPowerOff, HD_POWER_OFF_GRACE_MS);
+    }
+
+    private void powerOffHdIfWifiGoneLocked() {
+        if (!SystemSettingsStore.from(this).hdMount()) return;
+        if (manualHdWake) return;
+        if (isVesperaConnected()) return;
+        if (!shouldEnforceHdPowerOff()) return;
+        powerOffHdLocked(R.string.photo_hd_powered_off_offline);
+    }
+
     private void mountLocked(String spec) {
         Context localized = AppLocale.wrap(this);
         String use = spec == null || spec.trim().isEmpty() ? selectedSpec : spec.trim();
@@ -610,6 +631,7 @@ public final class PhotoSyncService extends Service {
         ejected = false;
         emptyAfterEject = false;
         hdLaunchPowerOffDone = true; // manual Attiva must survive later ensure()/BOOTSTRAP
+        cancelDelayedHdPowerOff();
         message = localized.getString(R.string.photo_hd_activating,
                 hdStore.displayName().isEmpty() ? use : hdStore.displayName());
         publish();
@@ -731,10 +753,16 @@ public final class PhotoSyncService extends Service {
     }
 
     private void applyHdOfflineOrOnlineLocked() {
-        boolean instrumentUp = isVesperaInstrumentUp();
-        if (!instrumentUp) {
+        cancelDelayedHdPowerOff();
+        if (!isVesperaConnected()) {
             powerOffHdLocked(R.string.photo_hd_powered_off_offline);
-            Log.i(TAG, "HD off: telescope silent (no Wi‑Fi API/FTP)");
+            Log.i(TAG, "HD off: Vespera Wi‑Fi not connected");
+            return;
+        }
+        if (!isVesperaInstrumentUp()) {
+            // AP is up; API/FTP often still booting. Leave the disk as-is.
+            Log.i(TAG, "HD policy: Wi‑Fi up, instrument still silent — leave HD as-is");
+            refreshMountStatus();
             return;
         }
         if (userUnmounted) {
@@ -776,14 +804,12 @@ public final class PhotoSyncService extends Service {
             UsbDisk only = UsbDisk.parse(disksEncoded[0]);
             if (only != null) use = only.id();
         }
-        // Already cleanly off: re-assert USB power-off.
+        // Already cleanly off: re-assert USB power-off without spamming the activity log.
         if (!mounted && ejected && !DaemonDisk.isPhotosBoundLive(DaemonDisk.photosDir(this))) {
             DaemonDisk.eject(this, use);
             ejected = true;
             mounted = false;
             message = localized.getString(messageRes);
-            SystemActivityLog.record(this, SystemActivityLog.KIND_HD_POWER_OFF,
-                    SystemActivityLog.DETAIL_OK);
             publish();
             return;
         }
@@ -853,6 +879,7 @@ public final class PhotoSyncService extends Service {
             }
         }
         if (status == null) return;
+        boolean wasMounted = mounted;
         applyMountStatus(status);
         if (status.mounted) {
             ejected = false;
@@ -870,8 +897,10 @@ public final class PhotoSyncService extends Service {
             message = localized.getString(R.string.photos_mount_ok, hdStore.displayName());
             extraAutoDelayMs = 0;
             scheduleNextAutoSync();
-            SystemActivityLog.record(this, SystemActivityLog.KIND_HD_MOUNT,
-                    SystemActivityLog.DETAIL_OK);
+            if (!wasMounted) {
+                SystemActivityLog.record(this, SystemActivityLog.KIND_HD_MOUNT,
+                        SystemActivityLog.DETAIL_OK);
+            }
         } else if (status.timeout) {
             Context localized = AppLocale.wrap(this);
             message = localized.getString(R.string.photos_daemon_timeout);
@@ -2167,6 +2196,7 @@ public final class PhotoSyncService extends Service {
         mainHandler.removeCallbacks(autoSyncAlarm);
         mainHandler.removeCallbacks(hourlyStorageCheck);
         mainHandler.removeCallbacks(sunTooHighAlarm);
+        cancelDelayedHdPowerOff();
         if (connectionReceiverRegistered) {
             try { unregisterReceiver(connectionReceiver); } catch (Exception ignored) {}
             connectionReceiverRegistered = false;

@@ -134,7 +134,7 @@
     <string name="watchdog_manual_restart">Manual Singularity restart…</string>
     <string name="watchdog_manual_prefix">Manual check: %1$s</string>
 
-    <string name="tab_wifi">Wi‑Fi</string>
+    <string name="tab_wifi">Connections</string>
     <string name="tab_telescope">Telescope</string>
     <string name="tab_photos">Photos / Hard Disk</string>
     <string name="tab_system">System</string>
@@ -223,8 +223,8 @@
     <string name="status_tab_instrument">Instrument (REST API)</string>
     <string name="status_tab_refresh">Refresh status</string>
     <string name="status_tab_fetching">Reading API…</string>
-    <string name="status_tab_error">API unreachable on 8082/8083 (try Verify ports on the Wi‑Fi tab).</string>
-    <string name="status_tab_need_wifi">Connect the Vespera from the Wi‑Fi tab to read instrument status.</string>
+    <string name="status_tab_error">API unreachable on 8082/8083 (try Verify ports on the Connections tab).</string>
+    <string name="status_tab_need_wifi">Connect the Vespera from the Connections tab to read instrument status.</string>
     <string name="status_tab_api_unavailable">No response from /v1/app/status or /v2/app/status.</string>
     <string name="status_tab_last_update">Last update: %1$s</string>
     <string name="status_tab_live">live Socket.IO 8083</string>
@@ -315,7 +315,7 @@
     <string name="photo_sync_interval_help">Automatic night sync every %1$s h. Daytime (%2$02d:00–%3$02d:00) has no schedule: it runs when Vespera comes online and once more before power-off.</string>
     <string name="photo_sync_night">Night sync active</string>
     <string name="photo_sync_need_hd">Mount the USB HD first.</string>
-    <string name="photo_sync_need_wifi">The photos are on the Vespera: connect it from the Wi‑Fi tab, then retry.</string>
+    <string name="photo_sync_need_wifi">The photos are on the Vespera: connect it from the Connections tab, then retry.</string>
     <string name="photo_sync_running">Syncing USER folder…</string>
     <string name="photo_sync_file">File %1$d/%2$d: %3$s</string>
     <string name="photo_sync_done">Sync OK: %1$d copied, %2$d already present, %3$d deleted on Vespera (%4$s).</string>
@@ -438,7 +438,7 @@
     <string name="photo_sync_clock_tz">Time zone: %1$s</string>
     <string name="photo_sync_clock_ok">Clock via NTP (Ethernet), without Vespera. Updated at launch and every day.</string>
     <string name="photo_sync_clock_pending">City time zone applied. NTP failed: Ethernet Internet is required.</string>
-    <string name="photo_sync_vespera_need">Connect the Vespera first (Wi‑Fi tab).</string>
+    <string name="photo_sync_vespera_need">Connect the Vespera first (Connections tab).</string>
     <string name="photo_sync_vespera_reading">Reading location from Vespera…</string>
     <string name="photo_sync_vespera_ok">Vespera location: %1$.2f, %2$.2f</string>
     <string name="photo_sync_vespera_fail">Vespera has no GPS of its own (it gets location from Singularity) and currently exposes no coordinates. Search a city.</string>
@@ -475,7 +475,7 @@
     <string name="system_resume_sync_idle">No sync to resume.</string>
     <string name="system_hd_mount_title">Automatic HD mount</string>
     <string name="system_hd_power_off_title">HD power off</string>
-    <string name="system_hd_mount_info">With Vespera online (API/FTP), mounts the saved HD. On app open if offline, and when powering off the telescope, powers the HD off. Activate/Mount/Power off remain manual.</string>
+    <string name="system_hd_mount_info">With Vespera online (API/FTP), mounts the saved HD. Powers it off only when Vespera Wi‑Fi is gone (app open or link loss) and when shutting down the telescope — not while the API is still starting. Activate/Mount/Power off remain manual.</string>
     <string name="system_hd_mount_none">No HD saved.</string>
     <string name="system_hd_mount_saved">Saved HD: %1$s.</string>
     <string name="system_clock_title">NTP clock sync</string>
@@ -492,7 +492,7 @@
     <string name="system_wifi_none">No instrument saved.</string>
     <string name="system_wifi_device">Instrument: %1$s · status: %2$s.</string>
     <string name="system_singularity_title">Automatic Singularity start</string>
-    <string name="system_singularity_info">After the Wi‑Fi connection, starts Singularity in the background (about 3 s). Restarts stay on the button in the Wi‑Fi tab.</string>
+    <string name="system_singularity_info">After the Wi‑Fi connection, starts Singularity in the background (about 3 s). Restarts stay on the button in the Connections tab.</string>
     <string name="system_watchdog_title">Periodic instrument check</string>
     <string name="system_watchdog_info">Every 30 s, while the app is in the foreground, checks whether Singularity sees the telescope.</string>
     <string name="system_watchdog_status">Status: %1$s</string>

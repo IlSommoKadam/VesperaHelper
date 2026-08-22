@@ -59,6 +59,8 @@ L'app mantiene una richiesta Wi-Fi generica e chiede al daemon root `tools/vespe
 | 0.6.87 | 134 | Spegnimento sun-too-high: non resta bloccato sulla sync; ogni 10 min aggiunge stop/park e logga l’errore HTTP |
 | 0.6.88 | 135 | Prima di spegnere aspetta che park/stop/motori siano idle (altrimenti ritenta tra 10 min) |
 | 0.6.89 | 136 | Dopo sync: PARK, poi poll ogni minuto fino a idle, poi spegnimento telescopio |
+| 0.6.90 | 137 | Hub eventi telescopio e notifiche Telegram |
+| 0.6.91 | 138 | Niente ciclo spegnimento/rimontaggio HD mentre il Wi‑Fi Vespera è su (API ancora in avvio) |
 
 Il daemon deve essere avviato come root sul Pi dopo il boot; l'app comunica con esso tramite `net.req` / `disk.req` nella propria directory esterna.
 
