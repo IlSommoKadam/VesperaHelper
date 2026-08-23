@@ -36,6 +36,8 @@ PROBE_ACK="$REQ_DIR/probe.ack"
 HD_MOUNT="/mnt/vespera-hd"
 HD_STATE="/data/local/tmp/vespera-hd.state"
 HD_USB_STATE="/data/local/tmp/vespera-hd-usb"
+HD_USB_PORTS="/data/local/tmp/vespera-hd-usb-ports"
+HD_USB_ID="/data/local/tmp/vespera-hd-usb-id"
 NTFS_DIR="/data/local/tmp/ntfs"
 NTFS_BIN="$NTFS_DIR/mount.ntfs"
 TABLE=94
@@ -554,7 +556,74 @@ save_hd_usb() {
   usb="$1"
   if [ -n "$usb" ] && [ -f "$usb/authorized" ]; then
     echo "$usb" > "$HD_USB_STATE"
+    if [ -f "$usb/idVendor" ] && [ -f "$usb/idProduct" ]; then
+      echo "$(cat "$usb/idVendor"):$(cat "$usb/idProduct")" > "$HD_USB_ID"
+    fi
   fi
+}
+
+usb_hub_port() {
+  [ -n "$1" ] && [ -e "$1/port" ] && readlink -f "$1/port"
+}
+
+# Pi 4: each USB-A connector is usb2-portN (SS) + 1-1-portN (HS). Cutting only
+# SuperSpeed leaves VBUS on and the disk reappears as USB2 (1-1.N).
+usb_twin_port() {
+  port="$1"
+  [ -n "$port" ] || return 1
+  name=$(basename "$port")
+  twin=""
+  case "$name" in
+    usb2-port[1-4])
+      n=${name#usb2-port}
+      twin="/sys/bus/usb/devices/1-1:1.0/1-1-port$n"
+      ;;
+    1-1-port[1-4])
+      n=${name#1-1-port}
+      twin="/sys/bus/usb/devices/usb2/2-0:1.0/usb2-port$n"
+      ;;
+    *) return 1 ;;
+  esac
+  [ -f "$twin/disable" ] || return 1
+  echo "$twin"
+}
+
+usb_port_record() {
+  port="$1"
+  [ -n "$port" ] || return 0
+  grep -qxF "$port" "$HD_USB_PORTS" 2>/dev/null && return 0
+  echo "$port" >> "$HD_USB_PORTS"
+}
+
+usb_port_disable() {
+  port="$1"
+  [ -n "$port" ] && [ -f "$port/disable" ] || return 1
+  echo 0 > "$port/power/pm_qos_no_power_off" 2>/dev/null
+  echo 1 > "$port/disable"
+  usb_port_record "$port"
+  echo "usb-port-disable $port $(date)" >&2
+}
+
+usb_port_enable() {
+  port="$1"
+  [ -n "$port" ] && [ -f "$port/disable" ] || return 1
+  echo 0 > "$port/disable"
+  echo "usb-port-enable $port $(date)" >&2
+}
+
+# USB mass-storage device dirs still enumerated (even with authorized=0).
+usb_storage_dirs() {
+  for d in /sys/bus/usb/devices/*; do
+    [ -f "$d/idVendor" ] || continue
+    for iface in "$d":*; do
+      [ -f "$iface/bInterfaceClass" ] || continue
+      class=$(cat "$iface/bInterfaceClass" 2>/dev/null)
+      if [ "$class" = "08" ]; then
+        echo "$d"
+        break
+      fi
+    done
+  done
 }
 
 eject_dev() {
@@ -569,11 +638,20 @@ eject_dev() {
   fi
 }
 
-# Re-authorize the USB mass-storage device after SCSI delete so Monta can find it again.
+# Re-enable hub ports then re-authorize so Monta can find the disk again.
 wake_disk() {
+  if [ -f "$HD_USB_PORTS" ]; then
+    while IFS= read -r port; do
+      usb_port_enable "$port"
+    done < "$HD_USB_PORTS"
+    sleep 3
+  fi
   usb=""
   if [ -f "$HD_USB_STATE" ]; then
     usb=$(cat "$HD_USB_STATE" 2>/dev/null)
+  fi
+  if [ -z "$usb" ] || [ ! -f "$usb/authorized" ]; then
+    usb=$(usb_storage_dirs | head -n 1)
   fi
   if [ -n "$usb" ] && [ -f "$usb/authorized" ]; then
     echo 0 > "$usb/authorized" 2>/dev/null
@@ -590,7 +668,7 @@ wake_disk() {
   write_ack "wake-disk-ok $(date)"
 }
 
-# Cut USB power/enumeration so the enclosure can spin down.
+# Cut VBUS on the HD USB-A port (SS + HS twin). authorized=0 alone leaves 5V on.
 usb_power_off() {
   usb=""
   if [ -f "$HD_USB_STATE" ]; then
@@ -599,12 +677,64 @@ usb_power_off() {
   if [ -z "$usb" ] && [ -n "$1" ]; then
     usb=$(usb_parent_of_block "$1")
   fi
-  if [ -n "$usb" ] && [ -f "$usb/authorized" ]; then
+  if [ -z "$usb" ]; then
+    usb=$(usb_storage_dirs | head -n 1)
+  fi
+
+  ports=""
+  if [ -n "$usb" ] && [ -d "$usb" ]; then
     save_hd_usb "$usb"
     echo 0 > "$usb/authorized" 2>/dev/null
-    return 0
+    p=$(usb_hub_port "$usb")
+    [ -n "$p" ] && ports="$p"
   fi
-  return 1
+  # Device already gone: recover SS/HS ports from the saved sysfs name (2-N / 1-1.N).
+  if [ -z "$ports" ] && [ -n "$usb" ]; then
+    case "$(basename "$usb")" in
+      2-[1-4])
+        n=$(basename "$usb" | cut -d- -f2)
+        ports="/sys/bus/usb/devices/usb2/2-0:1.0/usb2-port$n /sys/bus/usb/devices/1-1:1.0/1-1-port$n"
+        ;;
+      1-1.[1-4])
+        n=$(basename "$usb" | cut -d. -f2)
+        ports="/sys/bus/usb/devices/1-1:1.0/1-1-port$n /sys/bus/usb/devices/usb2/2-0:1.0/usb2-port$n"
+        ;;
+    esac
+  fi
+  if [ -f "$HD_USB_PORTS" ]; then
+    ports="$ports $(cat "$HD_USB_PORTS")"
+  fi
+
+  off=1
+  for p in $ports; do
+    usb_port_disable "$p"
+    twin=$(usb_twin_port "$p")
+    [ -n "$twin" ] && usb_port_disable "$twin"
+    off=0
+  done
+
+  vid=""; pid=""
+  if [ -f "$HD_USB_ID" ]; then
+    vid=$(cut -d: -f1 "$HD_USB_ID")
+    pid=$(cut -d: -f2 "$HD_USB_ID")
+  fi
+  sleep 1
+  if [ -n "$vid" ] && [ -n "$pid" ]; then
+    for d in /sys/bus/usb/devices/*; do
+      [ -f "$d/idVendor" ] || continue
+      [ "$(cat "$d/idVendor" 2>/dev/null)" = "$vid" ] || continue
+      [ "$(cat "$d/idProduct" 2>/dev/null)" = "$pid" ] || continue
+      p=$(usb_hub_port "$d")
+      [ -n "$p" ] || continue
+      echo 0 > "$d/authorized" 2>/dev/null
+      usb_port_disable "$p"
+      twin=$(usb_twin_port "$p")
+      [ -n "$twin" ] && usb_port_disable "$twin"
+      off=0
+    done
+  fi
+  echo "usb-power-off usb=${usb:-none} rc=$off $(date)" >&2
+  return "$off"
 }
 
 # Drop every leftover HD mount (incl. NTFS fuse ghosts after SCSI delete).

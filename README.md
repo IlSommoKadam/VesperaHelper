@@ -63,6 +63,7 @@ L'app mantiene una richiesta Wi-Fi generica e chiede al daemon root `tools/vespe
 | 0.6.91 | 138 | Niente ciclo spegnimento/rimontaggio HD mentre il Wi‑Fi Vespera è su (API ancora in avvio) |
 | 0.6.92 | 139 | Spegnimento HD solo dopo perdita Wi‑Fi reale, non all’apertura app né in REQUESTING |
 | 0.6.93 | 140 | Controllo mattutino: spegne senza richiedere GENERAL_SUN_TOO_HIGH |
+| 0.6.94 | 141 | Spegni HD taglia VBUS (USB3 + USB2): `authorized=0` non fermava il disco |
 
 Il daemon deve essere avviato come root sul Pi dopo il boot; l'app comunica con esso tramite `net.req` / `disk.req` nella propria directory esterna.
 
