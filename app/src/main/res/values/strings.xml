@@ -457,8 +457,8 @@
     <string name="system_activity_off">Disabilitata.</string>
     <string name="system_group_photo_sync">Sync foto</string>
     <string name="system_group_hd">Hard disk e FTP</string>
-    <string name="system_group_sun_shutdown">Spegnimento GENERAL_SUN_TOO_HIGH</string>
-    <string name="system_group_sun_intro">Se GENERAL_SUN_TOO_HIGH è attivo, esegue solo le azioni selezionate sotto (ordine: sync → telescopio → HD → Pi).</string>
+    <string name="system_group_sun_shutdown">Spegnimento mattutino</string>
+    <string name="system_group_sun_intro">Circa 30 min dopo l’alba esegue solo le azioni selezionate sotto (ordine: sync → telescopio → HD → Pi), qualunque sia lo stato del telescopio.</string>
     <string name="system_group_connection">Connessione Vespera</string>
     <string name="system_group_app">Avvio app</string>
     <string name="system_group_clock">Orologio e sito</string>
@@ -502,7 +502,7 @@
     <string name="system_keepalive_title">Riavvio servizi se l’app viene chiusa</string>
     <string name="system_keepalive_info">Se chiudi l’app dallo switcher, i servizi di connessione e sync ripartono da soli.</string>
     <string name="system_sun_check_title">Controllo mattutino</string>
-    <string name="system_sun_check_info">Una volta al giorno, circa 30 min dopo l’alba: verifica lo stato GENERAL_SUN_TOO_HIGH.</string>
+    <string name="system_sun_check_info">Una volta al giorno, circa 30 min dopo l’alba: esegue le azioni selezionate. Non aspetta GENERAL_SUN_TOO_HIGH.</string>
     <string name="system_sun_sync_title">Ultima sync foto</string>
     <string name="system_sun_sync_info">Copia le foto USER rimaste sull’HD prima delle altre azioni.</string>
     <string name="system_sun_telescope_title">Spegni telescopio</string>
@@ -515,7 +515,7 @@
     <string name="system_sun_last">Ultimo: %1$s — %2$s</string>
     <string name="system_sun_never">Nessun controllo ancora.</string>
     <string name="system_sun_result_not_status">stato diverso da GENERAL_SUN_TOO_HIGH</string>
-    <string name="system_sun_result_triggered">GENERAL_SUN_TOO_HIGH rilevato, sync/spegnimento in corso</string>
+    <string name="system_sun_result_triggered">controllo mattutino, sync/spegnimento in corso</string>
     <string name="system_sun_result_shutdown_ok">ultima sync e telescopio spento</string>
     <string name="system_sun_result_shutdown_fail">sync tentata, spegnimento non riuscito</string>
     <string name="system_sun_result_step">tentativo %1$d: %2$s</string>

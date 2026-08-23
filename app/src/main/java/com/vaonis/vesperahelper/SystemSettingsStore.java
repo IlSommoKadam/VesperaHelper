@@ -17,7 +17,7 @@ final class SystemSettingsStore {
     private static final String KEY_WATCHDOG = "watchdog";
     private static final String KEY_FTP_LOCAL = "ftp_local";
     private static final String KEY_KEEP_ALIVE = "keep_alive";
-    /** Daily GENERAL_SUN_TOO_HIGH check (~30 min after sunrise). */
+    /** Daily morning shutdown (~30 min after sunrise). */
     private static final String KEY_SUN_CHECK = "sun_too_high";
     private static final String KEY_SUN_SYNC = "sun_sync";
     private static final String KEY_SUN_TELESCOPE = "sun_telescope_shutdown";
@@ -36,7 +36,8 @@ final class SystemSettingsStore {
     /** Incomplete today's attempt: retry instead of waiting until tomorrow. */
     static boolean sunTooHighNeedsRetry(String result) {
         return SUN_RESULT_SHUTDOWN_FAIL.equals(result)
-                || SUN_RESULT_TRIGGERED.equals(result);
+                || SUN_RESULT_TRIGGERED.equals(result)
+                || SUN_RESULT_NOT_STATUS.equals(result);
     }
 
     static final class Snapshot {
@@ -157,8 +158,7 @@ final class SystemSettingsStore {
     }
 
     void recordSunTooHigh(int dayKey, String result, int attempt) {
-        boolean done = SUN_RESULT_NOT_STATUS.equals(result)
-                || SUN_RESULT_SHUTDOWN_OK.equals(result);
+        boolean done = SUN_RESULT_SHUTDOWN_OK.equals(result);
         prefs.edit()
                 .putInt(KEY_SUN_TOO_HIGH_DAY, dayKey)
                 .putLong(KEY_SUN_TOO_HIGH_AT, System.currentTimeMillis())

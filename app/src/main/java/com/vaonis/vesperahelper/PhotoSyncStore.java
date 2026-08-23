@@ -18,7 +18,7 @@ final class PhotoSyncStore {
     static final float DEFAULT_NIGHT_INTERVAL_HOURS = 1f;
     static final float MIN_INTERVAL_HOURS = 0.25f;
     static final float MAX_INTERVAL_HOURS = 12f;
-    /** Delay after civil sunrise before the once-a-day GENERAL_SUN_TOO_HIGH check. */
+    /** Delay after civil sunrise before the once-a-day morning shutdown. */
     static final long SUN_TOO_HIGH_AFTER_SUNRISE_MS = 30 * 60_000L;
 
     private static final String PREFS = "vespera_photo_sync";

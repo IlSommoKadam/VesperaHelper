@@ -86,8 +86,8 @@ public final class PhotoSyncService extends Service {
     private static final int AUTO_SYNC_ALARM_REQ = 44;
     /** HD/FTP housekeeping only — auto-sync is scheduled separately. */
     private static final long TICK_MS = 120_000;
-    /** Ignore brief Wi‑Fi flaps before spinning the HD down. */
-    private static final long HD_POWER_OFF_GRACE_MS = 45_000L;
+    /** Ignore brief Wi‑Fi flaps / association before spinning the HD down. */
+    private static final long HD_POWER_OFF_GRACE_MS = 60_000L;
     /** Occupied percent of Vespera internal storage (FTP /USER) that starts a photo sync. */
     static final int STORAGE_SYNC_PERCENT = 50;
     /** Occupied percent of the mounted USB HD that shows the disk warning. */
@@ -157,8 +157,6 @@ public final class PhotoSyncService extends Service {
                 cancelDelayedHdPowerOff();
                 worker.execute(() -> {
                     // Remount only when the instrument answers — SSID alone is not enough.
-                    // Do not spin the HD down while the Vespera AP is up: API/FTP often
-                    // lag a few seconds behind Wi‑Fi, and that used to cycle eject/mount.
                     Network net = resolveVesperaNetwork();
                     boolean instrumentUp = canReachVesperaFtp(net)
                             || InstrumentWatchdog.probeApiPort(PhotoSyncService.this, net, true) > 0;
@@ -169,11 +167,13 @@ public final class PhotoSyncService extends Service {
                     refreshTelescopeFtpLocked();
                     publish();
                 });
-                // Capability ticks re-broadcast CONNECTED; copy only on offline→online.
                 if (becameConnected) {
                     syncExecutor.execute(PhotoSyncService.this::syncOnVesperaOnline);
                 }
-            } else {
+            } else if (isRequestingStatus(status)) {
+                // Associating with the AP — do not treat this as "Vespera offline".
+                cancelDelayedHdPowerOff();
+            } else if (isWifiGoneStatus(status)) {
                 vesperaWasConnected = false;
                 TelescopeStatusHub.ensure().ingestConnection(false);
                 worker.execute(() -> {
@@ -400,8 +400,8 @@ public final class PhotoSyncService extends Service {
         } else if (ACTION_APP_OPEN.equals(action)) {
             worker.execute(() -> {
                 refreshClockAndSun(false);
-                // Opening the UI must power the HD off when the instrument is silent,
-                // even if the FGS was already running (e.g. after a previous Attiva HD).
+                // Re-evaluate HD policy without an immediate eject: opening the UI
+                // used to spin the disk down while Vespera was still associating.
                 appOpenHdPolicyLocked();
                 if (mounted) startFtpLocked();
                 else stopFtpLocked();
@@ -595,6 +595,25 @@ public final class PhotoSyncService extends Service {
         return DaemonDisk.isPhotosBoundLive(DaemonDisk.photosDir(this));
     }
 
+    private static boolean isRequestingStatus(String status) {
+        return status != null
+                && status.startsWith(VesperaConnectionService.STATUS_REQUESTING);
+    }
+
+    private static boolean isWifiGoneStatus(String status) {
+        return VesperaConnectionService.STATUS_DISCONNECTED.equals(status)
+                || VesperaConnectionService.STATUS_LOST.equals(status);
+    }
+
+    /** Wi‑Fi to the Vespera AP is up or being acquired — keep the HD spinning. */
+    private boolean isVesperaWifiPresent() {
+        if (isVesperaConnected()) return true;
+        if (resolveVesperaNetwork() != null) return true;
+        String status = VesperaConnectionService.getLastStatus();
+        return isRequestingStatus(status)
+                || VesperaConnectionService.STATUS_CONNECTED.equals(status);
+    }
+
     private void cancelDelayedHdPowerOff() {
         mainHandler.removeCallbacks(delayedHdPowerOff);
     }
@@ -603,6 +622,7 @@ public final class PhotoSyncService extends Service {
     private void scheduleHdPowerOffIfWifiGone() {
         if (!SystemSettingsStore.from(this).hdMount()) return;
         if (manualHdWake) return;
+        if (isVesperaWifiPresent()) return;
         mainHandler.removeCallbacks(delayedHdPowerOff);
         mainHandler.postDelayed(delayedHdPowerOff, HD_POWER_OFF_GRACE_MS);
     }
@@ -610,7 +630,10 @@ public final class PhotoSyncService extends Service {
     private void powerOffHdIfWifiGoneLocked() {
         if (!SystemSettingsStore.from(this).hdMount()) return;
         if (manualHdWake) return;
-        if (isVesperaConnected()) return;
+        if (isVesperaWifiPresent()) {
+            Log.i(TAG, "HD power-off skipped: Vespera Wi‑Fi still present");
+            return;
+        }
         if (!shouldEnforceHdPowerOff()) return;
         powerOffHdLocked(R.string.photo_hd_powered_off_offline);
     }
@@ -722,9 +745,9 @@ public final class PhotoSyncService extends Service {
     }
 
     /**
-     * At first service start in this process: power the HD off, then remount only if the
-     * instrument API/FTP answers. Later {@code ensure()}/BOOTSTRAP calls only refresh —
-     * they must not undo a manual Attiva HD. {@link #appOpenHdPolicyLocked()} handles UI opens.
+     * At first service start in this process: if Vespera Wi‑Fi is gone, schedule HD
+     * power-off; remount only if the instrument API/FTP answers. Later {@code ensure()}/
+     * BOOTSTRAP calls only refresh — they must not undo a manual Attiva HD.
      */
     private void bootstrapHdForConnectionLocked() {
         if (!SystemSettingsStore.from(this).hdMount()) {
@@ -736,42 +759,41 @@ public final class PhotoSyncService extends Service {
             return;
         }
         hdLaunchPowerOffDone = true;
-        Log.i(TAG, "bootstrap: power off HD at launch (once per process)");
+        Log.i(TAG, "bootstrap: evaluate HD power (once per process)");
         applyHdOfflineOrOnlineLocked();
     }
 
-    /** MainActivity opened: force power-off if telescope silent (even if FGS already up). */
+    /** MainActivity opened: re-evaluate HD policy without an immediate eject. */
     private void appOpenHdPolicyLocked() {
         if (!SystemSettingsStore.from(this).hdMount()) {
             refreshMountStatus();
             return;
         }
         Log.i(TAG, "app-open: re-evaluate HD power");
-        manualHdWake = false; // reopen always re-applies offline policy
         applyHdOfflineOrOnlineLocked();
         hdLaunchPowerOffDone = true;
     }
 
     private void applyHdOfflineOrOnlineLocked() {
-        cancelDelayedHdPowerOff();
-        if (!isVesperaConnected()) {
-            powerOffHdLocked(R.string.photo_hd_powered_off_offline);
-            Log.i(TAG, "HD off: Vespera Wi‑Fi not connected");
+        if (isVesperaWifiPresent()) {
+            cancelDelayedHdPowerOff();
+            if (!isVesperaInstrumentUp()) {
+                Log.i(TAG, "HD policy: Vespera Wi‑Fi present — leave HD as-is");
+                refreshMountStatus();
+                return;
+            }
+            if (userUnmounted) {
+                refreshMountStatus();
+                return;
+            }
+            autoPoweredOff = false;
+            ejected = false;
+            bootstrapMountLocked();
             return;
         }
-        if (!isVesperaInstrumentUp()) {
-            // AP is up; API/FTP often still booting. Leave the disk as-is.
-            Log.i(TAG, "HD policy: Wi‑Fi up, instrument still silent — leave HD as-is");
-            refreshMountStatus();
-            return;
-        }
-        if (userUnmounted) {
-            refreshMountStatus();
-            return;
-        }
-        autoPoweredOff = false;
-        ejected = false;
-        bootstrapMountLocked();
+        Log.i(TAG, "HD policy: no Vespera Wi‑Fi — delay power-off");
+        scheduleHdPowerOffIfWifiGone();
+        refreshMountStatus();
     }
 
     private void bootstrapMountLocked() {
@@ -1185,16 +1207,9 @@ public final class PhotoSyncService extends Service {
             retrySunTooHighSoon();
             return;
         }
-        if (!snap.isSunTooHigh()) {
-            Log.i(TAG, "sun-too-high check: status is not GENERAL_SUN_TOO_HIGH ("
-                    + snap.error + " / " + snap.state + ")");
-            settings.recordSunTooHigh(today, SystemSettingsStore.SUN_RESULT_NOT_STATUS);
-            SystemActivityLog.record(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
-                    SystemActivityLog.DETAIL_NOT_STATUS);
-            scheduleSunTooHighCheck();
-            return;
-        }
-        Log.i(TAG, "GENERAL_SUN_TOO_HIGH — running selected actions (attempt "
+        Log.i(TAG, "morning check — running selected actions (status="
+                + snap.error + " / " + snap.state + ", sunTooHigh="
+                + snap.isSunTooHigh() + ", attempt "
                 + settings.sunTooHighAttempt() + ")");
         if (!settings.sunSync() && !settings.sunTelescopeShutdown()
                 && !settings.sunHdShutdown() && !settings.sunPiShutdown()) {
@@ -1228,10 +1243,10 @@ public final class PhotoSyncService extends Service {
 
     /**
      * Copy remaining USER photos, then power off the telescope. Used by the
-     * sun-too-high check and by the manual shutdown button. {@code dayKey}
-     * ≥ 0 records the sun-too-high outcome; {@code -1} is a manual shutdown.
+     * morning check and by the manual shutdown button. {@code dayKey}
+     * ≥ 0 records the morning-check outcome; {@code -1} is a manual shutdown.
      * After sync, sends PARK then waits (poll every minute) then SHUTDOWN.
-     * On sun-too-high failure, retries every 10 minutes with the same flow.
+     * On morning-check failure, retries every 10 minutes with the same flow.
      */
     private void lastSyncThenShutdown(int dayKey, Network network, int apiPort) {
         boolean sunFlow = dayKey >= 0;

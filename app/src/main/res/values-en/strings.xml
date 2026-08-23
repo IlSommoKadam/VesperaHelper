@@ -457,8 +457,8 @@
     <string name="system_activity_off">Disabled.</string>
     <string name="system_group_photo_sync">Photo sync</string>
     <string name="system_group_hd">Hard disk and FTP</string>
-    <string name="system_group_sun_shutdown">GENERAL_SUN_TOO_HIGH shutdown</string>
-    <string name="system_group_sun_intro">If GENERAL_SUN_TOO_HIGH is active, only the selected actions below run (order: sync → telescope → HD → Pi).</string>
+    <string name="system_group_sun_shutdown">Morning shutdown</string>
+    <string name="system_group_sun_intro">About 30 min after sunrise, only the selected actions below run (order: sync → telescope → HD → Pi), regardless of telescope status.</string>
     <string name="system_group_connection">Vespera connection</string>
     <string name="system_group_app">App startup</string>
     <string name="system_group_clock">Clock and site</string>
@@ -502,7 +502,7 @@
     <string name="system_keepalive_title">Restart services if the app is closed</string>
     <string name="system_keepalive_info">If you swipe the app away, connection and sync services start again on their own.</string>
     <string name="system_sun_check_title">Morning check</string>
-    <string name="system_sun_check_info">Once a day, about 30 min after sunrise: looks for GENERAL_SUN_TOO_HIGH.</string>
+    <string name="system_sun_check_info">Once a day, about 30 min after sunrise: runs the selected actions. Does not wait for GENERAL_SUN_TOO_HIGH.</string>
     <string name="system_sun_sync_title">Last photo sync</string>
     <string name="system_sun_sync_info">Copy remaining USER photos to the HD before other actions.</string>
     <string name="system_sun_telescope_title">Power off telescope</string>
@@ -515,7 +515,7 @@
     <string name="system_sun_last">Last: %1$s — %2$s</string>
     <string name="system_sun_never">No check yet.</string>
     <string name="system_sun_result_not_status">status was not GENERAL_SUN_TOO_HIGH</string>
-    <string name="system_sun_result_triggered">GENERAL_SUN_TOO_HIGH seen, sync/power-off in progress</string>
+    <string name="system_sun_result_triggered">morning check, sync/power-off in progress</string>
     <string name="system_sun_result_shutdown_ok">last sync done, telescope powered off</string>
     <string name="system_sun_result_shutdown_fail">sync attempted, power-off failed</string>
     <string name="system_sun_result_step">attempt %1$d: %2$s</string>

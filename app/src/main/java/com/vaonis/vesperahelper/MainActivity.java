@@ -191,7 +191,7 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        // singleTask: reopening from launcher skips onCreate — still power off HD if offline.
+        // singleTask: reopening from launcher skips onCreate — still re-evaluate HD policy.
         PhotoSyncService.onAppOpened(this);
     }
 
