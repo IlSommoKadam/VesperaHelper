@@ -105,7 +105,8 @@ final class WeatherProtectionEngine {
                         + String.format(Locale.US, "%.2fmm", forecast.precipitationMm));
 
         if (!rain) {
-            store.setState(WeatherProtectionState.IDLE);
+            // Keep a completed/error state visible while the latch is set.
+            if (!store.protectionActive()) store.setState(WeatherProtectionState.IDLE);
             return;
         }
         if (store.protectionActive()) {
