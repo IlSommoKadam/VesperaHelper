@@ -523,6 +523,30 @@
     <string name="system_sun_pi_info">Tras las demás acciones, apaga también el Raspberry Pi (daemon root).</string>
     <string name="system_sun_requires_check">Requiere «Comprobación matinal» activa.</string>
 
+    <string name="system_group_weather">Protección meteorológica automática</string>
+    <string name="system_group_weather_intro">Comprueba el tiempo en la ubicación del Vespera y, si se prevé lluvia inminente, cierra y apaga automáticamente el telescopio.</string>
+    <string name="system_weather_enable">Protección meteorológica automática (ON/OFF)</string>
+    <string name="system_weather_latitude">Latitud</string>
+    <string name="system_weather_longitude">Longitud</string>
+    <string name="system_weather_source">Fuente meteo: %1$s</string>
+    <string name="system_weather_interval">Intervalo de comprobación (minutos)</string>
+    <string name="system_weather_lookahead">Anticipación de lluvia (minutos)</string>
+    <string name="system_weather_threshold">Umbral de precipitación (mm)</string>
+    <string name="system_weather_simulation">Modo simulación</string>
+    <string name="system_weather_info">Si se prevé lluvia dentro de la anticipación: parar sesión → cerrar Vespera → esperar brazo retraído/CLOSED → verificar → apagar. El apagado solo ocurre tras confirmar el estado cerrado.</string>
+    <string name="system_weather_no_coords">Configura latitud y longitud (o una ciudad en la pestaña Fotos / Disco duro).</string>
+    <string name="system_weather_last_check">Última comprobación: %1$s — %2$s</string>
+    <string name="system_weather_never">Ninguna comprobación todavía.</string>
+    <string name="system_weather_state">Estado: %1$s</string>
+    <string name="system_weather_api_fail">Errores consecutivos de Open-Meteo: %1$d</string>
+    <string name="system_weather_sim_on">Simulación activa: no se envía ningún comando real al Vespera.</string>
+    <string name="system_weather_decision_rain">lluvia prevista (%1$s mm)</string>
+    <string name="system_weather_decision_no_action">sin acción (%1$s mm)</string>
+    <string name="system_weather_decision_api_error">error de Open-Meteo</string>
+    <string name="system_weather_decision_no_coords">faltan coordenadas</string>
+    <string name="system_weather_log_check">Comprobación meteo</string>
+    <string name="system_weather_log_protect">Protección meteo</string>
+
     <string name="telegram_tab_title">Avisos Telegram</string>
     <string name="telegram_tab_intro">Crea un bot con @BotFather, copia el token, envía /start al bot y obtén el chat ID (p. ej. @userinfobot). Hace falta internet (Ethernet, VPN o LTE), no solo el Wi‑Fi Vespera. Guarda y elige los eventos. Un mensaje por transición, comprobación cada 2 minutos.</string>
     <string name="telegram_section_bot">Bot</string>

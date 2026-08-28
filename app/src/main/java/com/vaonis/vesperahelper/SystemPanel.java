@@ -10,9 +10,11 @@ import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -31,6 +33,7 @@ final class SystemPanel {
     private final SystemSettingsStore settings;
     private final PhotoSyncStore syncStore;
     private final UsbHdStore hdStore;
+    private final WeatherProtectionStore weatherStore;
     private final FixedScrollView scroll;
     private final Row photoSync;
     private final Row storageSync;
@@ -48,6 +51,14 @@ final class SystemPanel {
     private final Row watchdog;
     private final Row ftpLocal;
     private final Row keepAlive;
+    private CheckBox weatherEnable;
+    private EditText weatherLat;
+    private EditText weatherLon;
+    private EditText weatherInterval;
+    private EditText weatherLookAhead;
+    private EditText weatherThreshold;
+    private CheckBox weatherSimulation;
+    private TextView weatherInfo;
     private final TextView saveResult;
     private final TextView logBody;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -61,6 +72,7 @@ final class SystemPanel {
         this.settings = SystemSettingsStore.from(activity);
         this.syncStore = PhotoSyncStore.from(activity);
         this.hdStore = UsbHdStore.from(activity);
+        this.weatherStore = WeatherProtectionStore.from(activity);
 
         scroll = new FixedScrollView(activity);
         scroll.setVisibility(View.GONE);
@@ -97,6 +109,8 @@ final class SystemPanel {
         sunHd = addRow(sunGroup, activity.getString(R.string.system_sun_hd_title), snap.sunHdShutdown);
         sunPiShutdown = addRow(sunGroup, activity.getString(R.string.system_sun_pi_title),
                 snap.sunPiShutdown);
+
+        addWeatherGroup(layout);
 
         LinearLayout connGroup = addGroup(layout, R.string.system_group_connection, 0);
         wifiConnect = addRow(connGroup, activity.getString(R.string.system_wifi_title), snap.wifiConnect);
@@ -189,6 +203,18 @@ final class SystemPanel {
         watchdog.check.setChecked(snap.watchdog);
         ftpLocal.check.setChecked(snap.ftpLocal);
         keepAlive.check.setChecked(snap.keepAlive);
+        loadWeather();
+    }
+
+    private void loadWeather() {
+        WeatherProtectionStore.Config cfg = weatherStore.config();
+        weatherEnable.setChecked(cfg.enabled);
+        weatherLat.setText(displayLatitude(cfg));
+        weatherLon.setText(displayLongitude(cfg));
+        weatherInterval.setText(String.valueOf(cfg.checkIntervalMin));
+        weatherLookAhead.setText(String.valueOf(cfg.lookAheadMin));
+        weatherThreshold.setText(formatThreshold(cfg.thresholdMm));
+        weatherSimulation.setChecked(cfg.simulation);
     }
 
     private void saveAll() {
@@ -211,6 +237,7 @@ final class SystemPanel {
         snap.ftpLocal = ftpLocal.check.isChecked();
         snap.keepAlive = keepAlive.check.isChecked();
         settings.save(snap);
+        saveWeather();
         PhotoSyncService.applySettings(activity);
         if (activity instanceof MainActivity) {
             ((MainActivity) activity).onSystemSettingsSaved();
@@ -245,6 +272,22 @@ final class SystemPanel {
         ftpLocal.info.setText(ftpInfo(snap.ftpLocal));
         keepAlive.info.setText(prefixed(snap.keepAlive,
                 activity.getString(R.string.system_keepalive_info)));
+        if (weatherInfo != null) weatherInfo.setText(weatherInfoText());
+    }
+
+    private void saveWeather() {
+        WeatherProtectionStore.Config cfg = new WeatherProtectionStore.Config();
+        cfg.enabled = weatherEnable.isChecked();
+        cfg.latitude = weatherLat.getText().toString().trim();
+        cfg.longitude = weatherLon.getText().toString().trim();
+        cfg.checkIntervalMin = parseIntOr(weatherInterval.getText().toString(),
+                WeatherProtectionStore.DEFAULT_CHECK_INTERVAL_MIN);
+        cfg.lookAheadMin = parseIntOr(weatherLookAhead.getText().toString(),
+                WeatherProtectionStore.DEFAULT_LOOKAHEAD_MIN);
+        cfg.thresholdMm = parseFloatOr(weatherThreshold.getText().toString(),
+                WeatherProtectionStore.DEFAULT_THRESHOLD_MM);
+        cfg.simulation = weatherSimulation.isChecked();
+        weatherStore.saveConfig(cfg);
     }
 
     private void refreshLog() {
@@ -305,6 +348,12 @@ final class SystemPanel {
         }
         if (SystemActivityLog.KIND_KEEP_ALIVE.equals(kind)) {
             return activity.getString(R.string.system_keepalive_title);
+        }
+        if (SystemActivityLog.KIND_WEATHER_CHECK.equals(kind)) {
+            return activity.getString(R.string.system_weather_log_check);
+        }
+        if (SystemActivityLog.KIND_WEATHER_PROTECT.equals(kind)) {
+            return activity.getString(R.string.system_weather_log_protect);
         }
         return kind == null ? "—" : kind;
     }
@@ -503,6 +552,175 @@ final class SystemPanel {
         DateFormat format = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT);
         format.setTimeZone(syncStore.zone());
         return format.format(new Date(timeMs));
+    }
+
+    private void addWeatherGroup(LinearLayout layout) {
+        LinearLayout box = addGroup(layout, R.string.system_group_weather,
+                R.string.system_group_weather_intro);
+        WeatherProtectionStore.Config cfg = weatherStore.config();
+
+        weatherEnable = new CheckBox(activity);
+        weatherEnable.setText(R.string.system_weather_enable);
+        weatherEnable.setChecked(cfg.enabled);
+        weatherEnable.setFocusable(false);
+        weatherEnable.setFocusableInTouchMode(false);
+        weatherEnable.setTextSize(15);
+        weatherEnable.setTypeface(weatherEnable.getTypeface(), Typeface.BOLD);
+        weatherEnable.setTextColor(0xFF1A237E);
+        box.addView(weatherEnable);
+
+        weatherLat = addWeatherField(box, R.string.system_weather_latitude,
+                displayLatitude(cfg),
+                InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL
+                        | InputType.TYPE_NUMBER_FLAG_SIGNED);
+        weatherLon = addWeatherField(box, R.string.system_weather_longitude,
+                displayLongitude(cfg),
+                InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL
+                        | InputType.TYPE_NUMBER_FLAG_SIGNED);
+
+        addWeatherLabel(box, activity.getString(R.string.system_weather_source,
+                WeatherProtectionStore.SOURCE_OPEN_METEO));
+
+        weatherInterval = addWeatherField(box, R.string.system_weather_interval,
+                String.valueOf(cfg.checkIntervalMin), InputType.TYPE_CLASS_NUMBER);
+        weatherLookAhead = addWeatherField(box, R.string.system_weather_lookahead,
+                String.valueOf(cfg.lookAheadMin), InputType.TYPE_CLASS_NUMBER);
+        weatherThreshold = addWeatherField(box, R.string.system_weather_threshold,
+                formatThreshold(cfg.thresholdMm),
+                InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+
+        weatherSimulation = new CheckBox(activity);
+        weatherSimulation.setText(R.string.system_weather_simulation);
+        weatherSimulation.setChecked(cfg.simulation);
+        weatherSimulation.setFocusable(false);
+        weatherSimulation.setFocusableInTouchMode(false);
+        weatherSimulation.setTextColor(0xFF1A237E);
+        LinearLayout.LayoutParams simLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        simLp.topMargin = (int) (10 * density);
+        weatherSimulation.setLayoutParams(simLp);
+        box.addView(weatherSimulation);
+
+        weatherInfo = new TextView(activity);
+        weatherInfo.setTextSize(13);
+        weatherInfo.setTextColor(0xFF455A64);
+        weatherInfo.setPadding(0, (int) (8 * density), 0, 0);
+        weatherInfo.setText(weatherInfoText());
+        box.addView(weatherInfo);
+    }
+
+    private EditText addWeatherField(LinearLayout group, int labelRes, String value, int inputType) {
+        TextView label = new TextView(activity);
+        label.setText(labelRes);
+        label.setTextSize(13);
+        label.setTextColor(0xFF455A64);
+        label.setPadding(0, (int) (8 * density), 0, 0);
+        group.addView(label);
+
+        EditText edit = new EditText(activity);
+        edit.setText(value == null ? "" : value);
+        edit.setInputType(inputType);
+        edit.setSingleLine(true);
+        edit.setTextSize(15);
+        edit.setTextColor(0xFF1A237E);
+        group.addView(edit);
+        return edit;
+    }
+
+    private void addWeatherLabel(LinearLayout group, String text) {
+        TextView view = new TextView(activity);
+        view.setText(text);
+        view.setTextSize(13);
+        view.setTextColor(0xFF455A64);
+        view.setPadding(0, (int) (8 * density), 0, 0);
+        group.addView(view);
+    }
+
+    private String displayLatitude(WeatherProtectionStore.Config cfg) {
+        if (cfg.latitude != null && !cfg.latitude.isEmpty()) return cfg.latitude;
+        if ((cfg.longitude == null || cfg.longitude.isEmpty()) && syncStore.hasSite()) {
+            return WeatherProtectionStore.formatCoord(syncStore.siteLat());
+        }
+        return "";
+    }
+
+    private String displayLongitude(WeatherProtectionStore.Config cfg) {
+        if (cfg.longitude != null && !cfg.longitude.isEmpty()) return cfg.longitude;
+        if ((cfg.latitude == null || cfg.latitude.isEmpty()) && syncStore.hasSite()) {
+            return WeatherProtectionStore.formatCoord(syncStore.siteLon());
+        }
+        return "";
+    }
+
+    private String weatherInfoText() {
+        WeatherProtectionStore.Config cfg = weatherStore.config();
+        String base = activity.getString(R.string.system_weather_info);
+        if (!cfg.enabled) {
+            return activity.getString(R.string.system_activity_off) + "\n" + base;
+        }
+        StringBuilder sb = new StringBuilder(base);
+        if (!weatherStore.hasCoordinates() && !syncStore.hasSite()) {
+            sb.append('\n').append(activity.getString(R.string.system_weather_no_coords));
+        }
+        long last = weatherStore.lastCheckAt();
+        if (last > 0) {
+            sb.append('\n').append(activity.getString(R.string.system_weather_last_check,
+                    formatDateTime(last),
+                    weatherDecisionLabel(weatherStore.lastDecision(),
+                            weatherStore.lastPrecipMm())));
+        } else {
+            sb.append('\n').append(activity.getString(R.string.system_weather_never));
+        }
+        sb.append('\n').append(activity.getString(R.string.system_weather_state,
+                weatherStore.state()));
+        int fails = weatherStore.consecutiveApiFailures();
+        if (fails > 0) {
+            sb.append('\n').append(activity.getString(R.string.system_weather_api_fail, fails));
+        }
+        if (cfg.simulation) {
+            sb.append('\n').append(activity.getString(R.string.system_weather_sim_on));
+        }
+        return sb.toString();
+    }
+
+    private String weatherDecisionLabel(String decision, float precipMm) {
+        String mm = precipMm < 0 ? "—" : String.format(Locale.US, "%.2f", precipMm);
+        if (WeatherProtectionStore.DECISION_RAIN.equals(decision)) {
+            return activity.getString(R.string.system_weather_decision_rain, mm);
+        }
+        if (WeatherProtectionStore.DECISION_NO_ACTION.equals(decision)) {
+            return activity.getString(R.string.system_weather_decision_no_action, mm);
+        }
+        if (WeatherProtectionStore.DECISION_API_ERROR.equals(decision)) {
+            return activity.getString(R.string.system_weather_decision_api_error);
+        }
+        if (WeatherProtectionStore.DECISION_NO_COORDS.equals(decision)) {
+            return activity.getString(R.string.system_weather_decision_no_coords);
+        }
+        return decision == null || decision.isEmpty() ? "—" : decision;
+    }
+
+    private static int parseIntOr(String text, int fallback) {
+        if (text == null) return fallback;
+        try {
+            return Integer.parseInt(text.trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static float parseFloatOr(String text, float fallback) {
+        if (text == null) return fallback;
+        try {
+            return Float.parseFloat(text.trim().replace(',', '.'));
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static String formatThreshold(float mm) {
+        if (mm == Math.rint(mm)) return String.valueOf((int) mm);
+        return String.format(Locale.US, "%.2f", mm);
     }
 
     private LinearLayout addGroup(LinearLayout layout, int sectionTitleRes, int introRes) {

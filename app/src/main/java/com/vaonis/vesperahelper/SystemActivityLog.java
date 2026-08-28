@@ -27,6 +27,8 @@ final class SystemActivityLog {
     static final String KIND_SINGULARITY = "singularity_start";
     static final String KIND_FTP = "ftp_local";
     static final String KIND_KEEP_ALIVE = "keep_alive";
+    static final String KIND_WEATHER_CHECK = "weather_check";
+    static final String KIND_WEATHER_PROTECT = "weather_protect";
 
     static final String DETAIL_OK = "ok";
     static final String DETAIL_FAIL = "fail";

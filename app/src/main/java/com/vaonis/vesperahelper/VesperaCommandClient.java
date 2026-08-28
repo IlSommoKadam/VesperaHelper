@@ -349,11 +349,23 @@ final class VesperaCommandClient {
      */
     static boolean waitUntilIdleAfterPark(String host, int port, Network network,
             String reason) {
-        long deadline = System.currentTimeMillis() + PARK_IDLE_WAIT_MS;
+        return waitUntilIdleAfterPark(host, port, network, reason,
+                PARK_IDLE_WAIT_MS, PARK_IDLE_POLL_MS);
+    }
+
+    /**
+     * Poll variant with an explicit timeout and poll interval. Used by weather
+     * protection, which needs a shorter close/retract confirmation window than
+     * the morning shutdown.
+     */
+    static boolean waitUntilIdleAfterPark(String host, int port, Network network,
+            String reason, long timeoutMs, long pollMs) {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        long poll = pollMs > 0 ? pollMs : PARK_IDLE_POLL_MS;
         String last = "";
         while (true) {
             try {
-                Thread.sleep(PARK_IDLE_POLL_MS);
+                Thread.sleep(poll);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return false;

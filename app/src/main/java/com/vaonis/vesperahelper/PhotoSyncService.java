@@ -206,6 +206,17 @@ public final class PhotoSyncService extends Service {
         Thread t = new Thread(this::maybeCheckSunTooHigh, "sun-too-high");
         t.start();
     };
+    /** Periodic Automatic Weather Protection check (System tab). Reschedules itself. */
+    private final Runnable weatherAlarm = new Runnable() {
+        @Override public void run() {
+            new Thread(() -> WeatherProtectionEngine.runCheck(PhotoSyncService.this),
+                    "weather-protection").start();
+            WeatherProtectionStore store = WeatherProtectionStore.from(PhotoSyncService.this);
+            if (store.enabled()) {
+                mainHandler.postDelayed(this, weatherCheckIntervalMs(store));
+            }
+        }
+    };
     private final Runnable tick = new Runnable() {
         @Override public void run() {
         worker.execute(() -> {
@@ -379,6 +390,7 @@ public final class PhotoSyncService extends Service {
         scheduleNextAutoSync();
         scheduleHourlyStorageCheck();
         scheduleSunTooHighCheck();
+        scheduleWeatherCheck();
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -397,6 +409,7 @@ public final class PhotoSyncService extends Service {
             });
             scheduleNextAutoSync();
             scheduleSunTooHighCheck();
+            scheduleWeatherCheck();
         } else if (ACTION_APP_OPEN.equals(action)) {
             worker.execute(() -> {
                 refreshClockAndSun(false);
@@ -1982,6 +1995,29 @@ public final class PhotoSyncService extends Service {
         scheduleNextAutoSync();
         scheduleHourlyStorageCheck();
         scheduleSunTooHighCheck();
+        scheduleWeatherCheck();
+    }
+
+    private long weatherCheckIntervalMs(WeatherProtectionStore store) {
+        return Math.max(WeatherProtectionStore.MIN_CHECK_INTERVAL_MIN,
+                store.checkIntervalMin()) * 60_000L;
+    }
+
+    /**
+     * Schedules the Automatic Weather Protection check. Runs a first check
+     * shortly after enabling/boot, then every configured interval (default 5 min).
+     */
+    private void scheduleWeatherCheck() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(this::scheduleWeatherCheck);
+            return;
+        }
+        mainHandler.removeCallbacks(weatherAlarm);
+        WeatherProtectionStore store = WeatherProtectionStore.from(this);
+        if (!store.enabled()) return;
+        mainHandler.postDelayed(weatherAlarm, MIN_AUTO_DELAY_MS);
+        Log.i(TAG, "weather protection check scheduled (every "
+                + store.checkIntervalMin() + " min)");
     }
 
     private void stopFtpLocked() {
@@ -2211,6 +2247,7 @@ public final class PhotoSyncService extends Service {
         mainHandler.removeCallbacks(autoSyncAlarm);
         mainHandler.removeCallbacks(hourlyStorageCheck);
         mainHandler.removeCallbacks(sunTooHighAlarm);
+        mainHandler.removeCallbacks(weatherAlarm);
         cancelDelayedHdPowerOff();
         if (connectionReceiverRegistered) {
             try { unregisterReceiver(connectionReceiver); } catch (Exception ignored) {}
