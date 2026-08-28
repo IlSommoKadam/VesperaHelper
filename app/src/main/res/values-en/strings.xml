@@ -523,6 +523,30 @@
     <string name="system_sun_pi_info">After the other actions, also powers off the Raspberry Pi (root daemon).</string>
     <string name="system_sun_requires_check">Requires «Morning check» enabled.</string>
 
+    <string name="system_group_weather">Automatic Weather Protection</string>
+    <string name="system_group_weather_intro">Checks the weather at the Vespera location and, if rain is forecast soon, automatically closes and powers off the telescope.</string>
+    <string name="system_weather_enable">Automatic Weather Protection (ON/OFF)</string>
+    <string name="system_weather_latitude">Latitude</string>
+    <string name="system_weather_longitude">Longitude</string>
+    <string name="system_weather_source">Weather source: %1$s</string>
+    <string name="system_weather_interval">Weather check interval (minutes)</string>
+    <string name="system_weather_lookahead">Rain look-ahead (minutes)</string>
+    <string name="system_weather_threshold">Precipitation threshold (mm)</string>
+    <string name="system_weather_simulation">Simulation mode</string>
+    <string name="system_weather_info">When rain is forecast within the look-ahead: stop session → close Vespera → wait for arm retracted/CLOSED → verify → power off. Power off only happens after the closed state is confirmed.</string>
+    <string name="system_weather_no_coords">Set latitude and longitude (or a city in the Photos / Hard Disk tab).</string>
+    <string name="system_weather_last_check">Last check: %1$s — %2$s</string>
+    <string name="system_weather_never">No check yet.</string>
+    <string name="system_weather_state">State: %1$s</string>
+    <string name="system_weather_api_fail">Consecutive Open-Meteo errors: %1$d</string>
+    <string name="system_weather_sim_on">Simulation active: no real command sent to the Vespera.</string>
+    <string name="system_weather_decision_rain">rain forecast (%1$s mm)</string>
+    <string name="system_weather_decision_no_action">no action (%1$s mm)</string>
+    <string name="system_weather_decision_api_error">Open-Meteo error</string>
+    <string name="system_weather_decision_no_coords">missing coordinates</string>
+    <string name="system_weather_log_check">Weather check</string>
+    <string name="system_weather_log_protect">Weather protection</string>
+
     <string name="telegram_tab_title">Telegram alerts</string>
     <string name="telegram_tab_intro">Create a bot with @BotFather, copy the token, send /start to the bot and get the chat ID (e.g. @userinfobot). Internet is required (Ethernet, VPN or LTE), not just Vespera Wi‑Fi. Save and pick events. One message per transition, checked every 2 minutes.</string>
     <string name="telegram_section_bot">Bot</string>
