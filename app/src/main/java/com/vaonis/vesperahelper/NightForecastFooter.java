@@ -308,9 +308,11 @@ final class NightForecastFooter {
             if (!meta.isEmpty()) {
                 TextView detail = new TextView(root.getContext());
                 detail.setText(meta);
-                detail.setTextSize(11);
+                detail.setTextSize(14);
+                detail.setTypeface(detail.getTypeface(), Typeface.BOLD);
                 detail.setMaxLines(1);
-                detail.setTextColor(slot.precipitationMm >= 0.05d ? 0xFF1565C0 : 0xFF546E7A);
+                detail.setIncludeFontPadding(false);
+                detail.setTextColor(slot.precipitationMm >= 0.05d ? 0xFF1565C0 : 0xFF37474F);
                 texts.addView(detail);
             }
             cell.addView(texts);

@@ -15,6 +15,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Locale;
 
@@ -217,31 +218,38 @@ final class HostDns {
     }
 
     private static HttpResult parseHttp(byte[] raw) throws Exception {
-        String text = new String(raw, StandardCharsets.UTF_8);
-        int headerEnd = text.indexOf("\r\n\r\n");
+        byte[] sep = { '\r', '\n', '\r', '\n' };
+        int headerEnd = indexOf(raw, sep, 0);
         if (headerEnd < 0) throw new Exception("bad http response");
-        String header = text.substring(0, headerEnd);
-        String body = text.substring(headerEnd + 4);
+        String header = new String(raw, 0, headerEnd, StandardCharsets.US_ASCII);
+        int bodyStart = headerEnd + 4;
         int code = 0;
         String first = header.split("\r\n", 2)[0];
         String[] parts = first.split(" ");
         if (parts.length >= 2) {
             try { code = Integer.parseInt(parts[1]); } catch (Exception ignored) {}
         }
-        // Strip chunked encoding if present (simple single-chunk / identity).
+        byte[] bodyBytes;
         if (header.toLowerCase(Locale.US).contains("transfer-encoding: chunked")) {
-            body = decodeChunked(body);
+            // Chunk sizes are bytes, not UTF-16 chars — decode before String conversion
+            // or a single "°C" in Open-Meteo JSON desyncs the parser.
+            bodyBytes = decodeChunked(raw, bodyStart);
+        } else {
+            bodyBytes = Arrays.copyOfRange(raw, bodyStart, raw.length);
         }
-        return new HttpResult(code, body);
+        return new HttpResult(code, new String(bodyBytes, StandardCharsets.UTF_8));
     }
 
-    private static String decodeChunked(String body) {
-        StringBuilder out = new StringBuilder();
-        int i = 0;
-        while (i < body.length()) {
-            int lineEnd = body.indexOf("\r\n", i);
+    private static byte[] decodeChunked(byte[] raw, int offset) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] crlf = { '\r', '\n' };
+        int i = offset;
+        while (i < raw.length) {
+            int lineEnd = indexOf(raw, crlf, i);
             if (lineEnd < 0) break;
-            String sizeHex = body.substring(i, lineEnd).trim();
+            String sizeHex = new String(raw, i, lineEnd - i, StandardCharsets.US_ASCII).trim();
+            int semi = sizeHex.indexOf(';');
+            if (semi >= 0) sizeHex = sizeHex.substring(0, semi).trim();
             int size;
             try {
                 size = Integer.parseInt(sizeHex, 16);
@@ -250,14 +258,25 @@ final class HostDns {
             }
             i = lineEnd + 2;
             if (size == 0) break;
-            if (i + size > body.length()) {
-                out.append(body.substring(i));
+            if (i + size > raw.length) {
+                out.write(raw, i, raw.length - i);
                 break;
             }
-            out.append(body, i, i + size);
+            out.write(raw, i, size);
             i += size + 2; // skip data + CRLF
         }
-        return out.toString();
+        return out.toByteArray();
+    }
+
+    private static int indexOf(byte[] haystack, byte[] needle, int from) {
+        outer:
+        for (int i = from; i <= haystack.length - needle.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
     }
 
     private static boolean isIpLiteral(String host) {

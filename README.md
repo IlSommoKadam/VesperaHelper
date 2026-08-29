@@ -87,6 +87,8 @@ L'app mantiene una richiesta Wi-Fi generica e chiede al daemon root `tools/vespe
 | 0.8.4 | 162 | Posizione: un solo campo lat, lon (incolla da Maps) |
 | 0.8.5 | 163 | Nominatim via DoH/IPv4 (GPS aggiorna la città sul Pi senza DNS LAN) |
 | 0.8.6 | 164 | Footer: bandiera nazione + pin città accanto al nome |
+| 0.8.7 | 165 | Footer meteo: HTTP chunked a byte (il °C di Open-Meteo spezzava il JSON) |
+| 0.8.8 | 166 | Footer: temperatura più grande e contrastata |
 
 Il daemon deve essere avviato come root sul Pi dopo il boot; l'app comunica con esso tramite `net.req` / `disk.req` nella propria directory esterna. Comandi Ethernet su `net.req`: `eth-status`, `eth-dhcp`, `eth-static|ip|prefix|gw|dns1|dns2` (ack su `net.ack`).
 
