@@ -206,14 +206,14 @@ final class TelegramPanel {
         saveResult.setTextColor(UiStyle.SLATE);
         saveResult.setText(R.string.telegram_test_sending);
         worker.execute(() -> {
-            TelegramBotClient.Result me = TelegramBotClient.getMe(settings.token());
+            TelegramBotClient.Result me = TelegramBotClient.getMe(activity, settings.token());
             if (!me.ok) {
                 settings.recordError(me.error);
                 mainHandler.post(() -> showTestResult(false, me.error));
                 return;
             }
             TelegramBotClient.Result sent = TelegramBotClient.sendMessage(
-                    settings.token(), settings.chatId(),
+                    activity, settings.token(), settings.chatId(),
                     activity.getString(R.string.telegram_test_message));
             if (sent.ok) settings.recordOk();
             else settings.recordError(sent.error);

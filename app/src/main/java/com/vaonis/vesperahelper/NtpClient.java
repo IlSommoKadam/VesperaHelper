@@ -1,5 +1,6 @@
 package com.vaonis.vesperahelper;
 
+import android.net.Network;
 import android.util.Log;
 
 import java.net.DatagramPacket;
@@ -10,19 +11,21 @@ import java.net.InetAddress;
 final class NtpClient {
     private static final String TAG = "VesperaNtp";
     private static final String[] HOSTS = {
+            "216.239.35.0",
+            "216.239.35.4",
+            "162.159.200.1",
             "time.google.com",
-            "time.cloudflare.com",
-            "pool.ntp.org"
+            "time.cloudflare.com"
     };
     private static final long NTP_UNIX_OFFSET = 2_208_988_800L;
 
     private NtpClient() {}
 
-    static long unixTimeMs() throws Exception {
+    static long unixTimeMs(Network network) throws Exception {
         Exception last = null;
         for (String host : HOSTS) {
             try {
-                return query(host);
+                return query(host, network);
             } catch (Exception failure) {
                 last = failure;
                 Log.w(TAG, host + ": " + failure.getMessage());
@@ -31,11 +34,17 @@ final class NtpClient {
         throw last != null ? last : new Exception("ntp failed");
     }
 
-    private static long query(String host) throws Exception {
+    private static long query(String host, Network network) throws Exception {
         byte[] request = new byte[48];
         request[0] = 0x1B;
-        InetAddress address = InetAddress.getByName(host);
+        InetAddress address = resolve(host, network);
         try (DatagramSocket socket = new DatagramSocket()) {
+            if (network != null) {
+                try {
+                    network.bindSocket(socket);
+                } catch (Exception ignored) {
+                }
+            }
             socket.setSoTimeout(4_000);
             socket.send(new DatagramPacket(request, request.length, address, 123));
             byte[] response = new byte[48];
@@ -50,6 +59,17 @@ final class NtpClient {
             }
             return unixSec * 1000L + millis;
         }
+    }
+
+    private static InetAddress resolve(String host, Network network) throws Exception {
+        if (network != null) {
+            try {
+                InetAddress[] all = network.getAllByName(host);
+                if (all != null && all.length > 0 && all[0] != null) return all[0];
+            } catch (Exception ignored) {
+            }
+        }
+        return InetAddress.getByName(host);
     }
 
     private static long u32(byte[] data, int offset) {

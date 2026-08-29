@@ -2,6 +2,7 @@ package com.vaonis.vesperahelper;
 
 import android.app.AlarmManager;
 import android.content.Context;
+import android.net.Network;
 import android.os.SystemClock;
 import android.util.Log;
 
@@ -17,7 +18,8 @@ import java.util.TimeZone;
 final class SiteClock {
     private static final String TAG = "VesperaClock";
     static final long INTERVAL_MS = 18 * 60 * 60 * 1000L;
-    static final long RETRY_MS = 2 * 60 * 1000L;
+    /** After a failed NTP while Internet is up: next tick, not 18 h. */
+    static final long RETRY_MS = 30 * 1000L;
     static final long APPLY_SKEW_MS = 90 * 1000L;
 
     static final class Result {
@@ -52,15 +54,20 @@ final class SiteClock {
         boolean ntpOk = false;
         boolean ntpAttempted = false;
         long ntpMs = now;
+        Network internet = InternetNetwork.find(context);
+        if (internet == null && !forceNtp) {
+            boolean hoursChanged = store.applySunHours(now, false);
+            return new Result(false, hoursChanged, false, zoneId, 0);
+        }
         boolean skewed = store.clockLooksWrong(now);
-        long minGap = (skewed || !store.lastNtpOk()) ? RETRY_MS : INTERVAL_MS;
+        long minGap = (store.lastNtpOk() && !skewed) ? INTERVAL_MS : RETRY_MS;
         boolean due = forceNtp
                 || (!store.clockSyncedRecently(minGap)
                 && (skewed || store.clockSyncDue(now, INTERVAL_MS)));
         if (due) {
             ntpAttempted = true;
             try {
-                ntpMs = NtpClient.unixTimeMs();
+                ntpMs = NtpClient.unixTimeMs(internet);
                 applySystemClock(context, zoneId, ntpMs);
                 ntpOk = clockMatches(ntpMs) || waitForClock(ntpMs, 2_000);
                 store.recordClockSync(ntpOk ? ntpMs : System.currentTimeMillis(), ntpOk);

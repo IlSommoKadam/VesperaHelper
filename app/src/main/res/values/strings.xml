@@ -479,7 +479,7 @@
     <string name="system_hd_mount_none">Nessun HD salvato.</string>
     <string name="system_hd_mount_saved">HD salvato: %1$s.</string>
     <string name="system_clock_title">Sincronizzazione orologio NTP</string>
-    <string name="system_clock_info">Imposta fuso e ora del Pi via NTP (Ethernet), senza Vespera. Aggiornamento all’avvio e circa ogni 18 h.</string>
+    <string name="system_clock_info">Imposta fuso e ora del Pi via NTP su Ethernet/Internet, senza Vespera. Parte solo se c’è Internet; all’avvio e circa ogni 18 h.</string>
     <string name="system_clock_unset">Imposta una città nella tab Foto / Hard Disk.</string>
     <string name="system_clock_last">Fuso %1$s · ultimo NTP: %2$s (%3$s).</string>
     <string name="system_clock_never">mai</string>

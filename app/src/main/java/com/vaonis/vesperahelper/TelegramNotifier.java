@@ -34,14 +34,14 @@ final class TelegramNotifier implements TelescopeStatusHub.Listener {
     void sendTest(Runnable onDone) {
         worker.execute(() -> {
             Context localized = AppLocale.wrap(app);
-            TelegramBotClient.Result me = TelegramBotClient.getMe(settings.token());
+            TelegramBotClient.Result me = TelegramBotClient.getMe(app, settings.token());
             if (!me.ok) {
                 settings.recordError(me.error);
                 if (onDone != null) onDone.run();
                 return;
             }
             TelegramBotClient.Result sent = TelegramBotClient.sendMessage(
-                    settings.token(), settings.chatId(),
+                    app, settings.token(), settings.chatId(),
                     localized.getString(R.string.telegram_test_message));
             if (sent.ok) settings.recordOk();
             else settings.recordError(sent.error);
@@ -55,8 +55,12 @@ final class TelegramNotifier implements TelescopeStatusHub.Listener {
 
     private void sendOrQueue(String text) {
         if (!settings.configured()) return;
+        if (!InternetNetwork.available(app)) {
+            queue(text);
+            return;
+        }
         TelegramBotClient.Result result = TelegramBotClient.sendMessage(
-                settings.token(), settings.chatId(), text);
+                app, settings.token(), settings.chatId(), text);
         if (result.ok) {
             settings.recordOk();
             drainQueue();
@@ -64,16 +68,21 @@ final class TelegramNotifier implements TelescopeStatusHub.Listener {
         }
         settings.recordError(result.error);
         Log.w(TAG, "send failed " + result.error);
+        queue(text);
+    }
+
+    private void queue(String text) {
         if (pending.size() >= QUEUE_MAX) pending.pollFirst();
         pending.addLast(text);
     }
 
     private void drainQueue() {
         if (!settings.configured()) return;
+        if (!InternetNetwork.available(app)) return;
         while (!pending.isEmpty()) {
             String text = pending.peekFirst();
             TelegramBotClient.Result result = TelegramBotClient.sendMessage(
-                    settings.token(), settings.chatId(), text);
+                    app, settings.token(), settings.chatId(), text);
             if (!result.ok) {
                 settings.recordError(result.error);
                 return;

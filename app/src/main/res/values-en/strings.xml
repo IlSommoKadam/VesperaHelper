@@ -479,7 +479,7 @@
     <string name="system_hd_mount_none">No HD saved.</string>
     <string name="system_hd_mount_saved">Saved HD: %1$s.</string>
     <string name="system_clock_title">NTP clock sync</string>
-    <string name="system_clock_info">Sets the Pi time zone and clock via NTP (Ethernet), without Vespera. Updates at launch and about every 18 h.</string>
+    <string name="system_clock_info">Sets the Pi time zone and clock via NTP on Ethernet/Internet, without Vespera. Runs only when Internet is up; at launch and about every 18 h.</string>
     <string name="system_clock_unset">Set a city on the Photos / Hard Disk tab.</string>
     <string name="system_clock_last">Zone %1$s · last NTP: %2$s (%3$s).</string>
     <string name="system_clock_never">never</string>

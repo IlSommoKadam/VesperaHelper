@@ -479,7 +479,7 @@
     <string name="system_hd_mount_none">Ningún HD guardado.</string>
     <string name="system_hd_mount_saved">HD guardado: %1$s.</string>
     <string name="system_clock_title">Sincronización de reloj NTP</string>
-    <string name="system_clock_info">Ajusta zona horaria y hora del Pi por NTP (Ethernet), sin Vespera. Se actualiza al arrancar y unas cada 18 h.</string>
+    <string name="system_clock_info">Ajusta zona horaria y hora del Pi por NTP en Ethernet/Internet, sin Vespera. Solo si hay Internet; al arrancar y unas cada 18 h.</string>
     <string name="system_clock_unset">Elige una ciudad en la pestaña Fotos / Hard Disk.</string>
     <string name="system_clock_last">Zona %1$s · último NTP: %2$s (%3$s).</string>
     <string name="system_clock_never">nunca</string>

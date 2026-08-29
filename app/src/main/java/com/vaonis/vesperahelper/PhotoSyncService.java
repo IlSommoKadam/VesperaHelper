@@ -998,8 +998,13 @@ public final class PhotoSyncService extends Service {
         if (!SystemSettingsStore.from(this).clockNtp()) return;
         SiteClock.Result result = SiteClock.sync(this, syncStore, forceNtp);
         if (result.ntpAttempted) {
-            SystemActivityLog.record(this, SystemActivityLog.KIND_CLOCK_NTP,
-                    result.ntpOk ? SystemActivityLog.DETAIL_OK : SystemActivityLog.DETAIL_FAIL);
+            String detail = result.ntpOk
+                    ? SystemActivityLog.DETAIL_OK : SystemActivityLog.DETAIL_FAIL;
+            // One failed NTP line until it succeeds — hourly retries must not fill the log.
+            if (forceNtp || result.ntpOk
+                    || !SystemActivityLog.lastKindIs(this, SystemActivityLog.KIND_CLOCK_NTP, detail)) {
+                SystemActivityLog.record(this, SystemActivityLog.KIND_CLOCK_NTP, detail);
+            }
         }
         if (result.hoursChanged || result.ntpOk) {
             Log.i(TAG, "clock tz=" + result.timeZoneId

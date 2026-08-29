@@ -1,5 +1,6 @@
 package com.vaonis.vesperahelper;
 
+import android.content.Context;
 import android.util.Log;
 
 import org.json.JSONObject;
@@ -13,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 
 import javax.net.ssl.HttpsURLConnection;
 
-/** Telegram Bot API over the default internet route (not the Vespera Wi‑Fi bind). */
+/** Telegram Bot API over Ethernet/Internet, never the Vespera Wi‑Fi. */
 final class TelegramBotClient {
     private static final String TAG = "VesperaTelegram";
     private static final int TIMEOUT_MS = 10_000;
@@ -30,11 +31,11 @@ final class TelegramBotClient {
 
     private TelegramBotClient() {}
 
-    static Result getMe(String token) {
-        return request(token, "getMe", null);
+    static Result getMe(Context context, String token) {
+        return request(context, token, "getMe", null);
     }
 
-    static Result sendMessage(String token, String chatId, String text) {
+    static Result sendMessage(Context context, String token, String chatId, String text) {
         if (chatId == null || chatId.trim().isEmpty()) {
             return new Result(false, "chat_id empty");
         }
@@ -46,20 +47,20 @@ final class TelegramBotClient {
             body.put("chat_id", chatId.trim());
             body.put("text", text);
             body.put("disable_web_page_preview", true);
-            return request(token, "sendMessage", body.toString());
+            return request(context, token, "sendMessage", body.toString());
         } catch (Exception failure) {
             return new Result(false, failure.getClass().getSimpleName());
         }
     }
 
-    private static Result request(String token, String method, String jsonBody) {
+    private static Result request(Context context, String token, String method, String jsonBody) {
         if (token == null || token.trim().isEmpty()) {
             return new Result(false, "token empty");
         }
         HttpURLConnection conn = null;
         try {
             URL url = new URL("https://api.telegram.org/bot" + token.trim() + "/" + method);
-            conn = (HttpsURLConnection) url.openConnection();
+            conn = (HttpsURLConnection) InternetNetwork.openConnection(context, url);
             conn.setConnectTimeout(TIMEOUT_MS);
             conn.setReadTimeout(TIMEOUT_MS);
             conn.setInstanceFollowRedirects(true);

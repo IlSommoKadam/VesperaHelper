@@ -77,6 +77,36 @@ final class SystemActivityLog {
         notifyChanged(context);
     }
 
+    /** Newest kept entry, or null. */
+    static Entry newest(Context context) {
+        if (context == null) return null;
+        synchronized (LOCK) {
+            SharedPreferences prefs = prefs(context);
+            List<String> lines = prune(split(prefs.getString(KEY, "")), System.currentTimeMillis());
+            Collections.sort(lines, NEWEST_FIRST);
+            return lines.isEmpty() ? null : parse(lines.get(0));
+        }
+    }
+
+    static boolean lastIs(Context context, String kind, String detail) {
+        Entry newest = newest(context);
+        if (newest == null) return false;
+        String wantKind = kind == null ? "" : kind;
+        String wantDetail = detail == null ? "" : detail;
+        return wantKind.equals(newest.kind) && wantDetail.equals(newest.detail);
+    }
+
+    /** Newest entry of this kind, regardless of later unrelated activities. */
+    static boolean lastKindIs(Context context, String kind, String detail) {
+        String wantKind = kind == null ? "" : kind;
+        String wantDetail = detail == null ? "" : detail;
+        if (wantKind.isEmpty()) return false;
+        for (Entry entry : latest(context)) {
+            if (wantKind.equals(entry.kind)) return wantDetail.equals(entry.detail);
+        }
+        return false;
+    }
+
     /** Drop timestamps that became "future" after the system clock moved backwards. */
     static void dropFuture(Context context) {
         if (context == null) return;
