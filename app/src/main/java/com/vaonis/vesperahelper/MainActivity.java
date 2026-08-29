@@ -88,12 +88,21 @@ public final class MainActivity extends Activity {
     private Button tabTelescope;
     private Button tabSystem;
     private Button tabTelegram;
+    private LinearLayout wifiPane;
     private FixedScrollView wifiScroll;
+    private FixedScrollView lanScroll;
+    private Button subTabVespera;
+    private Button subTabLan;
     private TelescopePanel telescopePanel;
     private PhotoPanel photoPanel;
     private SystemPanel systemPanel;
     private TelegramPanel telegramPanel;
+    private NightForecastFooter nightForecastFooter;
+    private EthernetPanel ethernetPanel;
     private int currentTab = TAB_WIFI;
+    private static final int WIFI_SUB_VESPERA = 0;
+    private static final int WIFI_SUB_LAN = 1;
+    private int wifiSubTab = WIFI_SUB_VESPERA;
     /** True when the saved instrument is currently seen in Wi-Fi scan. */
     private boolean savedDeviceOnline;
     /** True from Connect tap until the service reports a terminal status. */
@@ -411,21 +420,108 @@ public final class MainActivity extends Activity {
             return insets.consumeSystemWindowInsets();
         });
 
+        ethernetPanel = new EthernetPanel(this, density);
+        lanScroll = new FixedScrollView(this);
+        lanScroll.setVerticalScrollBarEnabled(true);
+        lanScroll.setScrollbarFadingEnabled(false);
+        lanScroll.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        LinearLayout lanLayout = new LinearLayout(this);
+        lanLayout.setOrientation(LinearLayout.VERTICAL);
+        lanLayout.setPadding(padding, padding / 2, padding, bottomPadding);
+        lanLayout.setLayoutParams(new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        lanLayout.addView(ethernetPanel.view());
+        lanScroll.addView(lanLayout);
+        lanScroll.setOnApplyWindowInsetsListener((v, insets) -> {
+            int insetBottom = insets.getSystemWindowInsetBottom();
+            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), insetBottom);
+            return insets.consumeSystemWindowInsets();
+        });
+
+        LinearLayout wifiSubBar = buildWifiSubTabBar(density);
+        wifiPane = new LinearLayout(this);
+        wifiPane.setOrientation(LinearLayout.VERTICAL);
+        wifiPane.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        wifiPane.addView(wifiSubBar);
+        wifiPane.addView(wifiScroll);
+        wifiPane.addView(lanScroll);
+
         telescopePanel = new TelescopePanel(this, density, padding);
         photoPanel = new PhotoPanel(this, density, padding);
         systemPanel = new SystemPanel(this, density, padding);
         telegramPanel = new TelegramPanel(this, density, padding);
+        nightForecastFooter = new NightForecastFooter(this, density);
 
         root.addView(header);
         root.addView(headerDivider);
         root.addView(tabBar);
-        root.addView(wifiScroll);
+        root.addView(wifiPane);
         root.addView(photoPanel.view());
         root.addView(telescopePanel.view());
         root.addView(systemPanel.view());
         root.addView(telegramPanel.view());
+        root.addView(nightForecastFooter.view());
         setContentView(root);
         showTab(TAB_WIFI);
+    }
+
+    private LinearLayout buildWifiSubTabBar(float density) {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setBackgroundColor(0xFFE8EEF4);
+        int outerPad = (int) (8 * density);
+        wrap.setPadding(outerPad, 0, outerPad, (int) (6 * density));
+        wrap.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setBackground(UiStyle.tabStripWell(density));
+        int inset = Math.max(2, (int) (2 * density));
+        bar.setPadding(inset, inset, inset, inset);
+        bar.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        subTabVespera = new Button(this);
+        subTabVespera.setAllCaps(false);
+        subTabVespera.setGravity(Gravity.CENTER);
+        subTabVespera.setText(R.string.tab_conn_vespera);
+        subTabVespera.setOnClickListener(v -> showWifiSubTab(WIFI_SUB_VESPERA));
+        subTabLan = new Button(this);
+        subTabLan.setAllCaps(false);
+        subTabLan.setGravity(Gravity.CENTER);
+        subTabLan.setText(R.string.tab_conn_lan);
+        subTabLan.setOnClickListener(v -> showWifiSubTab(WIFI_SUB_LAN));
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        subTabVespera.setLayoutParams(lp);
+        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        subTabLan.setLayoutParams(lp2);
+        bar.addView(subTabVespera);
+        bar.addView(tabDivider(density));
+        bar.addView(subTabLan);
+        wrap.addView(bar);
+        return wrap;
+    }
+
+    private void showWifiSubTab(int sub) {
+        wifiSubTab = sub;
+        boolean vespera = sub == WIFI_SUB_VESPERA;
+        if (wifiScroll != null) {
+            wifiScroll.setVisibility(vespera ? View.VISIBLE : View.GONE);
+        }
+        if (lanScroll != null) {
+            lanScroll.setVisibility(vespera ? View.GONE : View.VISIBLE);
+        }
+        styleTab(subTabVespera, vespera, true, false);
+        styleTab(subTabLan, !vespera, false, true);
+        if (!vespera && ethernetPanel != null) {
+            ethernetPanel.onVisible();
+        }
     }
 
     private LinearLayout buildTabBar(float density) {
@@ -525,8 +621,8 @@ public final class MainActivity extends Activity {
             telegramPanel.onHidden();
         }
         currentTab = tab;
-        if (wifiScroll != null) {
-            wifiScroll.setVisibility(tab == TAB_WIFI ? View.VISIBLE : View.GONE);
+        if (wifiPane != null) {
+            wifiPane.setVisibility(tab == TAB_WIFI ? View.VISIBLE : View.GONE);
         }
         if (photoPanel != null) {
             photoPanel.view().setVisibility(tab == TAB_PHOTOS ? View.VISIBLE : View.GONE);
@@ -554,6 +650,8 @@ public final class MainActivity extends Activity {
             systemPanel.onVisible();
         } else if (tab == TAB_TELEGRAM && telegramPanel != null) {
             telegramPanel.onVisible();
+        } else if (tab == TAB_WIFI) {
+            showWifiSubTab(wifiSubTab);
         }
     }
 
@@ -1048,6 +1146,11 @@ public final class MainActivity extends Activity {
 
     void onSystemSettingsSaved() {
         startWatchdogIfConnected();
+        refreshNightForecast();
+    }
+
+    void refreshNightForecast() {
+        if (nightForecastFooter != null) nightForecastFooter.refresh();
     }
 
     private void stopWatchdog() {
@@ -1361,11 +1464,14 @@ public final class MainActivity extends Activity {
         }
         if (systemPanel != null && currentTab == TAB_SYSTEM) systemPanel.onVisible();
         if (telegramPanel != null && currentTab == TAB_TELEGRAM) telegramPanel.onVisible();
+        if (ethernetPanel != null && currentTab == TAB_WIFI) ethernetPanel.onVisible();
+        if (nightForecastFooter != null) nightForecastFooter.start();
     }
 
     @Override protected void onDestroy() {
         if (photoPanel != null) photoPanel.shutdown();
         if (telescopePanel != null) telescopePanel.shutdown();
+        if (ethernetPanel != null) ethernetPanel.shutdown();
         stopWatchdog();
         if (instrumentWatchdog != null) {
             instrumentWatchdog.shutdown();
@@ -1395,6 +1501,7 @@ public final class MainActivity extends Activity {
         }
         if (systemPanel != null && currentTab == TAB_SYSTEM) systemPanel.onHidden();
         if (telegramPanel != null && currentTab == TAB_TELEGRAM) telegramPanel.onHidden();
+        if (nightForecastFooter != null) nightForecastFooter.stop();
         super.onPause();
     }
 }

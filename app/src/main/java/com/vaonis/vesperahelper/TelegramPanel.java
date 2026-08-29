@@ -41,6 +41,7 @@ final class TelegramPanel {
     private final Row sunTooHigh;
     private final Row batteryLow;
     private final Row storageInternalHigh;
+    private final Row rainForecast;
     private final TextView saveResult;
     private final TextView lastStatus;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -101,6 +102,8 @@ final class TelegramPanel {
                 snap.batteryLow);
         storageInternalHigh = addRow(extra, activity.getString(R.string.telegram_ev_storage),
                 snap.storageInternalHigh);
+        rainForecast = addRow(extra, activity.getString(R.string.telegram_ev_rain),
+                snap.rainForecast);
 
         Button save = new Button(activity);
         save.setAllCaps(true);
@@ -170,6 +173,7 @@ final class TelegramPanel {
         sunTooHigh.check.setChecked(snap.sunTooHigh);
         batteryLow.check.setChecked(snap.batteryLow);
         storageInternalHigh.check.setChecked(snap.storageInternalHigh);
+        rainForecast.check.setChecked(snap.rainForecast);
     }
 
     private TelegramSettingsStore.Snapshot collect() {
@@ -189,6 +193,7 @@ final class TelegramPanel {
         snap.sunTooHigh = sunTooHigh.check.isChecked();
         snap.batteryLow = batteryLow.check.isChecked();
         snap.storageInternalHigh = storageInternalHigh.check.isChecked();
+        snap.rainForecast = rainForecast.check.isChecked();
         return snap;
     }
 

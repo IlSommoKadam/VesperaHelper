@@ -52,6 +52,7 @@ public final class VesperaConnectionService extends Service {
     private static final String SINGULARITY_REQ = "singularity.req";
     private static final String DISK_REQ = "disk.req";
     private static final String PROBE_REQ = "probe.req";
+    private static final String ETH_REQ = "eth.req";
 
     private static final long SINGULARITY_START_DELAY_MS = 3_000;
 
@@ -199,6 +200,11 @@ public final class VesperaConnectionService extends Service {
     /** Ask daemon to probe whether Singularity sees the Vespera instrument. */
     public static boolean writeNetRequest(Context context, String line) {
         return writeNetRequestStatic(context, line);
+    }
+
+    /** Dedicated file so set-clock / route cannot overwrite Ethernet IP commands. */
+    public static boolean writeEthRequest(Context context, String line) {
+        return writeRequestFile(context, ETH_REQ, line);
     }
 
     /** Dedicated request file so route/promote cannot overwrite a pending Singularity check. */

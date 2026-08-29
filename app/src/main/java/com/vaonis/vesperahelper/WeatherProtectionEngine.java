@@ -56,15 +56,15 @@ final class WeatherProtectionEngine {
         long now = System.currentTimeMillis();
         store.setState(WeatherProtectionState.CHECKING_WEATHER);
 
-        double lat = store.latitude();
-        double lon = store.longitude();
-        if (Double.isNaN(lat) || Double.isNaN(lon)) {
-            // Fall back to the configured observing site coordinates if present.
-            PhotoSyncStore site = PhotoSyncStore.from(app);
-            if (site.hasSite()) {
-                lat = site.siteLat();
-                lon = site.siteLon();
-            }
+        double lat;
+        double lon;
+        PhotoSyncStore site = PhotoSyncStore.from(app);
+        if (site.hasSite()) {
+            lat = site.siteLat();
+            lon = site.siteLon();
+        } else {
+            lat = store.latitude();
+            lon = store.longitude();
         }
         int lookAhead = store.lookAheadMin();
         if (Double.isNaN(lat) || Double.isNaN(lon)) {
@@ -75,7 +75,7 @@ final class WeatherProtectionEngine {
             return;
         }
 
-        OpenMeteoClient.Forecast forecast = OpenMeteoClient.fetch(lat, lon, lookAhead);
+        OpenMeteoClient.Forecast forecast = OpenMeteoClient.fetch(app, lat, lon, lookAhead);
         if (!forecast.success) {
             store.incrementApiFailures();
             store.recordCheck(now, WeatherProtectionStore.DECISION_API_ERROR, -1f, -1);
@@ -113,7 +113,17 @@ final class WeatherProtectionEngine {
             Log.i(TAG, "rain detected but protection already active — no new sequence");
             return;
         }
+        notifyRainForecast(app, precip, lookAhead, store.simulation());
         runProtection(app, store, now);
+    }
+
+    private static void notifyRainForecast(Context app, float precipMm, int lookAheadMin,
+            boolean simulation) {
+        try {
+            new TelegramNotifier(app).notifyRainForecast(precipMm, lookAheadMin, simulation);
+        } catch (Exception failure) {
+            Log.w(TAG, "telegram rain notify failed: " + failure.getMessage());
+        }
     }
 
     private static void runProtection(Context app, WeatherProtectionStore store, long now) {

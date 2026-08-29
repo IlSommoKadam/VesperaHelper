@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Configuration and runtime state for the Automatic Weather Protection feature
@@ -113,6 +115,14 @@ final class WeatherProtectionStore {
         clearProtectionLatch();
     }
 
+    /** Updates only the site coordinates used for Open-Meteo (no latch reset). */
+    void setCoordinates(double lat, double lon) {
+        prefs.edit()
+                .putString(KEY_LAT, formatCoord(lat))
+                .putString(KEY_LON, formatCoord(lon))
+                .commit();
+    }
+
     boolean enabled() { return prefs.getBoolean(KEY_ENABLED, false); }
 
     boolean simulation() { return prefs.getBoolean(KEY_SIMULATION, false); }
@@ -211,7 +221,7 @@ final class WeatherProtectionStore {
 
     static double parseCoord(String raw) {
         if (raw == null) return Double.NaN;
-        String trimmed = raw.trim();
+        String trimmed = raw.trim().replace(',', '.');
         if (trimmed.isEmpty()) return Double.NaN;
         try {
             return Double.parseDouble(trimmed);
@@ -224,4 +234,31 @@ final class WeatherProtectionStore {
         if (Double.isNaN(value)) return "";
         return String.format(Locale.US, "%.5f", value);
     }
+
+    static String formatLatLon(double lat, double lon) {
+        if (Double.isNaN(lat) || Double.isNaN(lon)) return "";
+        return formatCoord(lat) + ", " + formatCoord(lon);
+    }
+
+    /**
+     * Parses a single "lat, lon" paste (Google Maps, comma/space/semicolon).
+     * Returns null if the pair is missing or out of range.
+     */
+    static double[] parseLatLon(String raw) {
+        if (raw == null) return null;
+        String text = raw.trim();
+        if (text.isEmpty()) return null;
+        Matcher match = LAT_LON.matcher(text);
+        if (!match.find()) return null;
+        double lat = parseCoord(match.group(1));
+        double lon = parseCoord(match.group(2));
+        if (Double.isNaN(lat) || Double.isNaN(lon)
+                || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+            return null;
+        }
+        return new double[] { lat, lon };
+    }
+
+    private static final Pattern LAT_LON = Pattern.compile(
+            "([+-]?\\d+(?:[.,]\\d+)?)\\s*[,;\\s]\\s*([+-]?\\d+(?:[.,]\\d+)?)");
 }

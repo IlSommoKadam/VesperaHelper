@@ -53,6 +53,18 @@ final class TelegramNotifier implements TelescopeStatusHub.Listener {
         worker.execute(this::drainQueue);
     }
 
+    /** Rain forecast alert from weather protection (not a telescope status event). */
+    void notifyRainForecast(float precipMm, int lookAheadMin, boolean simulation) {
+        if (!settings.configured()) return;
+        if (!settings.rainForecastEnabled()) return;
+        Context localized = AppLocale.wrap(app);
+        String mm = String.format(java.util.Locale.US, "%.2f", precipMm);
+        String text = simulation
+                ? localized.getString(R.string.telegram_msg_rain_sim, mm, lookAheadMin)
+                : localized.getString(R.string.telegram_msg_rain, mm, lookAheadMin);
+        worker.execute(() -> sendOrQueue(text));
+    }
+
     private void sendOrQueue(String text) {
         if (!settings.configured()) return;
         if (!InternetNetwork.available(app)) {

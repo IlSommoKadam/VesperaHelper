@@ -52,6 +52,7 @@ final class PhotoSyncStore {
     private static final String KEY_NTP_OK = "last_ntp_ok";
     static final String SITE_CITY = "city";
     static final String SITE_VESPERA = "vespera";
+    static final String SITE_MANUAL = "manual";
     static final String MARKER_NAME = "sync.inprogress";
 
     private final SharedPreferences prefs;

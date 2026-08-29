@@ -129,6 +129,45 @@ final class VesperaLocationClient {
         return new Site(lat, lon);
     }
 
+    /** Parses lat/lon from a status snapshot (location string or raw JSON). */
+    static Site fromSnapshot(VesperaStatusSnapshot snap) {
+        if (snap == null) return null;
+        Site fromText = parseLocationText(snap.location);
+        if (fromText != null) return fromText;
+        return parse(snap.rawJson);
+    }
+
+    static Site parseLocationText(String loc) {
+        if (loc == null || loc.isEmpty()) return null;
+        int comma = loc.lastIndexOf(',');
+        if (comma <= 0 || comma >= loc.length() - 1) return null;
+        String lonPart = loc.substring(comma + 1).trim();
+        String before = loc.substring(0, comma).trim();
+        int sep = Math.max(before.lastIndexOf(' '), before.lastIndexOf('·'));
+        String latPart = sep >= 0 ? before.substring(sep + 1).trim() : before;
+        try {
+            double lat = Double.parseDouble(latPart);
+            double lon = Double.parseDouble(lonPart);
+            if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+            if (Math.abs(lat) < 0.01 && Math.abs(lon) < 0.01) return null;
+            return new Site(lat, lon);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    /** Great-circle distance in metres. */
+    static double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
+        double earth = 6_371_000.0;
+        double p1 = Math.toRadians(lat1);
+        double p2 = Math.toRadians(lat2);
+        double dLat = Math.toRadians(lat2 - lat1);
+        double dLon = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+                + Math.cos(p1) * Math.cos(p2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return earth * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
     private static Double firstNumber(JSONObject obj, String... keys) {
         for (String key : keys) {
             if (!obj.has(key) || obj.isNull(key)) continue;

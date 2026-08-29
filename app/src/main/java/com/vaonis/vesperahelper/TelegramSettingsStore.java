@@ -27,6 +27,7 @@ final class TelegramSettingsStore {
         boolean sunTooHigh = true;
         boolean batteryLow = true;
         boolean storageInternalHigh = false;
+        boolean rainForecast = true;
     }
 
     private final SharedPreferences prefs;
@@ -66,6 +67,7 @@ final class TelegramSettingsStore {
         snap.sunTooHigh = prefs.getBoolean("ev_sun", true);
         snap.batteryLow = prefs.getBoolean("ev_battery_low", true);
         snap.storageInternalHigh = prefs.getBoolean("ev_storage80", false);
+        snap.rainForecast = prefs.getBoolean("ev_rain", true);
         return snap;
     }
 
@@ -87,6 +89,7 @@ final class TelegramSettingsStore {
                 .putBoolean("ev_sun", snap.sunTooHigh)
                 .putBoolean("ev_battery_low", snap.batteryLow)
                 .putBoolean("ev_storage80", snap.storageInternalHigh)
+                .putBoolean("ev_rain", snap.rainForecast)
                 .commit();
     }
 
@@ -120,5 +123,9 @@ final class TelegramSettingsStore {
             case STORAGE_INTERNAL_HIGH: return snap.storageInternalHigh;
             default: return false;
         }
+    }
+
+    boolean rainForecastEnabled() {
+        return prefs.getBoolean("ev_rain", true);
     }
 }

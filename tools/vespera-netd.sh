@@ -6,6 +6,7 @@
 #   - start-singularity: launch only if not running (no force-stop); UI stays in background
 #   - restart-singularity: force-stop + relaunch without taking the screen
 #     (Singularity comes to front only if the user opens it by hand)
+#   - eth-status / eth-dhcp / eth-static: Ethernet Internet (DHCP or manual IP)
 #   - keep VesperaHelper FGS alive after crash / force-stop / swipe-away (resume photo sync)
 #   - list-disks / mount-disk / umount-disk / disk-status / ensure-bind  (USB HD)
 #
@@ -33,6 +34,8 @@ DISKS_ACK="$REQ_DIR/disks.ack"
 MOUNT_ACK="$REQ_DIR/mount.ack"
 PROBE_REQ="$REQ_DIR/probe.req"
 PROBE_ACK="$REQ_DIR/probe.ack"
+ETH_REQ="$REQ_DIR/eth.req"
+ETH_ACK="$REQ_DIR/eth.ack"
 HD_MOUNT="/mnt/vespera-hd"
 HD_STATE="/data/local/tmp/vespera-hd.state"
 HD_USB_STATE="/data/local/tmp/vespera-hd-usb"
@@ -40,6 +43,8 @@ HD_USB_PORTS="/data/local/tmp/vespera-hd-usb-ports"
 HD_USB_ID="/data/local/tmp/vespera-hd-usb-id"
 NTFS_DIR="/data/local/tmp/ntfs"
 NTFS_BIN="$NTFS_DIR/mount.ntfs"
+ETH_IFACE="eth0"
+ETH_STATE="/data/local/tmp/vespera-eth.state"
 TABLE=94
 PRIORITY=94
 
@@ -62,6 +67,11 @@ publish_file() {
 write_ack() {
   echo "$1" > "$ACK_FILE"
   publish_file "$ACK_FILE"
+}
+
+write_eth_ack() {
+  echo "$1" > "$ETH_ACK"
+  publish_file "$ETH_ACK"
 }
 
 write_singularity_ack() {
@@ -977,6 +987,229 @@ set_clock() {
   write_ack "clock-ok tz=$tz epoch=$epoch $(date)"
 }
 
+# --- Ethernet Internet (DHCP / static) ---
+
+eth_valid_ipv4() {
+  echo "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
+}
+
+eth_iface_up() {
+  ip link set "$ETH_IFACE" up 2>/dev/null
+}
+
+eth_read_ip_prefix() {
+  # "inet 192.168.1.4/24 ..."
+  ip -4 -o addr show dev "$ETH_IFACE" 2>/dev/null | awk '{print $4}' | head -n 1
+}
+
+eth_read_gateway() {
+  # Android ConnectivityService keeps the uplink in table "eth0".
+  gw=$(ip -4 route show table eth0 2>/dev/null | awk '/default/ { for (i=1;i<=NF;i++) if ($i=="via") { print $(i+1); exit } }')
+  [ -n "$gw" ] && echo "$gw" && return
+  ip -4 route show default 2>/dev/null | awk '/default/ { for (i=1;i<=NF;i++) if ($i=="via") { print $(i+1); exit } }'
+}
+
+eth_has_default_route() {
+  ip -4 route show table eth0 2>/dev/null | grep -q 'default' && return 0
+  ip -4 route show default 2>/dev/null | grep -q .
+}
+
+eth_set_default_route() {
+  gw="$1"
+  [ -z "$gw" ] || [ "$gw" = "-" ] && return 1
+  # Main table + Android per-iface table used by ConnectivityService.
+  ip route replace default via "$gw" dev "$ETH_IFACE" 2>/dev/null \
+    || ip route add default via "$gw" dev "$ETH_IFACE" 2>/dev/null
+  ip route replace default via "$gw" dev "$ETH_IFACE" table eth0 2>/dev/null \
+    || ip route add default via "$gw" dev "$ETH_IFACE" table eth0 2>/dev/null
+  # Drop stale next-hop ARP for the old gateway if present.
+  ip neigh flush dev "$ETH_IFACE" 2>/dev/null
+  return 0
+}
+
+eth_read_dns1() {
+  d=$(getprop net.dns1 2>/dev/null)
+  [ -n "$d" ] && echo "$d" && return
+  if [ -f /etc/resolv.conf ]; then
+    awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf 2>/dev/null
+  fi
+}
+
+eth_read_dns2() {
+  d=$(getprop net.dns2 2>/dev/null)
+  [ -n "$d" ] && echo "$d" && return
+  if [ -f /etc/resolv.conf ]; then
+    awk '/^nameserver/ { c++; if (c==2) { print $2; exit } }' /etc/resolv.conf 2>/dev/null
+  fi
+}
+
+eth_mode() {
+  if [ -f "$ETH_STATE" ] && grep -q '^MODE=static' "$ETH_STATE" 2>/dev/null; then
+    echo static
+  else
+    echo dhcp
+  fi
+}
+
+eth_set_dns() {
+  dns1="$1"
+  dns2="$2"
+  [ -n "$dns1" ] && setprop net.dns1 "$dns1" 2>/dev/null
+  [ -n "$dns2" ] && setprop net.dns2 "$dns2" 2>/dev/null
+  # Best-effort for ConnectivityService resolver.
+  if [ -n "$dns1" ]; then
+    if [ -n "$dns2" ]; then
+      ndc resolver setnetdns "$ETH_IFACE" "" "$dns1" "$dns2" >/dev/null 2>&1 \
+        || ndc resolver setnetdns eth0 "" "$dns1" "$dns2" >/dev/null 2>&1
+    else
+      ndc resolver setnetdns "$ETH_IFACE" "" "$dns1" >/dev/null 2>&1 \
+        || ndc resolver setnetdns eth0 "" "$dns1" >/dev/null 2>&1
+    fi
+  fi
+}
+
+eth_status() {
+  if ! ip link show "$ETH_IFACE" >/dev/null 2>&1; then
+    write_eth_ack "eth-err|no-iface|$ETH_IFACE"
+    return 1
+  fi
+  mode=$(eth_mode)
+  cidr=$(eth_read_ip_prefix)
+  ip_addr=""
+  prefix=""
+  if [ -n "$cidr" ]; then
+    ip_addr=$(echo "$cidr" | cut -d/ -f1)
+    prefix=$(echo "$cidr" | cut -d/ -f2)
+  fi
+  gw=$(eth_read_gateway)
+  dns1=$(eth_read_dns1)
+  dns2=$(eth_read_dns2)
+  route=0
+  eth_has_default_route && route=1
+  [ -z "$ip_addr" ] && ip_addr="-"
+  [ -z "$prefix" ] && prefix="-"
+  [ -z "$gw" ] && gw="-"
+  [ -z "$dns1" ] && dns1="-"
+  [ -z "$dns2" ] && dns2="-"
+  write_eth_ack "eth-status|$mode|$ip_addr|$prefix|$gw|$dns1|$dns2|route=$route"
+}
+
+eth_save_static_state() {
+  ip_addr="$1"
+  prefix="$2"
+  gw="$3"
+  dns1="$4"
+  dns2="$5"
+  {
+    echo "MODE=static"
+    echo "IP=$ip_addr"
+    echo "PREFIX=$prefix"
+    echo "GW=$gw"
+    echo "DNS1=$dns1"
+    echo "DNS2=$dns2"
+  } > "$ETH_STATE"
+  chmod 644 "$ETH_STATE" 2>/dev/null
+}
+
+eth_clear_state() {
+  rm -f "$ETH_STATE" 2>/dev/null
+}
+
+eth_apply_static() {
+  ip_addr="$1"
+  prefix="$2"
+  gw="$3"
+  dns1="$4"
+  dns2="$5"
+  if ! ip link show "$ETH_IFACE" >/dev/null 2>&1; then
+    write_eth_ack "eth-err|no-iface|$ETH_IFACE"
+    return 1
+  fi
+  if ! eth_valid_ipv4 "$ip_addr"; then
+    write_eth_ack "eth-err|bad-ip|$ip_addr"
+    return 1
+  fi
+  case "$prefix" in
+    ''|*[!0-9]*) write_eth_ack "eth-err|bad-prefix|$prefix"; return 1 ;;
+  esac
+  if [ "$prefix" -lt 8 ] || [ "$prefix" -gt 30 ]; then
+    write_eth_ack "eth-err|bad-prefix|$prefix"
+    return 1
+  fi
+  if [ -n "$gw" ] && [ "$gw" != "-" ] && ! eth_valid_ipv4 "$gw"; then
+    write_eth_ack "eth-err|bad-gw|$gw"
+    return 1
+  fi
+  eth_iface_up
+  # Stop DHCP clients that would fight static config.
+  killall dhcpcd 2>/dev/null
+  killall dhclient 2>/dev/null
+  cur=$(eth_read_ip_prefix)
+  want="$ip_addr/$prefix"
+  if [ "$cur" != "$want" ]; then
+    ip addr flush dev "$ETH_IFACE" 2>/dev/null
+    if ! ip addr add "$want" dev "$ETH_IFACE" 2>/dev/null; then
+      write_eth_ack "eth-err|addr-add-failed|$want"
+      return 1
+    fi
+  fi
+  if [ -n "$gw" ] && [ "$gw" != "-" ]; then
+    eth_set_default_route "$gw"
+    # ConnectivityService often rewrites table eth0 just after addr changes.
+    sleep 1
+    eth_set_default_route "$gw"
+  fi
+  eth_set_dns "$dns1" "$dns2"
+  eth_save_static_state "$ip_addr" "$prefix" "$gw" "$dns1" "$dns2"
+  eth_status
+}
+
+eth_apply_dhcp() {
+  if ! ip link show "$ETH_IFACE" >/dev/null 2>&1; then
+    write_eth_ack "eth-err|no-iface|$ETH_IFACE"
+    return 1
+  fi
+  eth_clear_state
+  eth_iface_up
+  ip addr flush dev "$ETH_IFACE" 2>/dev/null
+  # Prefer dhcpcd when present; else bounce Android ethernet service.
+  if command -v dhcpcd >/dev/null 2>&1; then
+    dhcpcd -k "$ETH_IFACE" >/dev/null 2>&1
+    dhcpcd -n "$ETH_IFACE" >/dev/null 2>&1 || dhcpcd "$ETH_IFACE" >/dev/null 2>&1
+  elif command -v dhclient >/dev/null 2>&1; then
+    dhclient -r "$ETH_IFACE" >/dev/null 2>&1
+    dhclient "$ETH_IFACE" >/dev/null 2>&1
+  else
+    svc ethernet disable >/dev/null 2>&1
+    sleep 1
+    svc ethernet enable >/dev/null 2>&1
+    ndc interface clearaddrs "$ETH_IFACE" >/dev/null 2>&1
+  fi
+  # Wait briefly for a lease / ConnectivityService.
+  i=0
+  while [ "$i" -lt 8 ]; do
+    cidr=$(eth_read_ip_prefix)
+    [ -n "$cidr" ] && break
+    sleep 1
+    i=$((i + 1))
+  done
+  # If still no default route but we have a .1 guess from /24, leave it to the user.
+  eth_status
+}
+
+eth_restore_from_state() {
+  [ -f "$ETH_STATE" ] || return 0
+  grep -q '^MODE=static' "$ETH_STATE" 2>/dev/null || return 0
+  ip_addr=$(grep '^IP=' "$ETH_STATE" | cut -d= -f2)
+  prefix=$(grep '^PREFIX=' "$ETH_STATE" | cut -d= -f2)
+  gw=$(grep '^GW=' "$ETH_STATE" | cut -d= -f2)
+  dns1=$(grep '^DNS1=' "$ETH_STATE" | cut -d= -f2)
+  dns2=$(grep '^DNS2=' "$ETH_STATE" | cut -d= -f2)
+  [ -n "$ip_addr" ] && [ -n "$prefix" ] || return 0
+  echo "eth-restore-static $ip_addr/$prefix via $gw $(date)" >&2
+  eth_apply_static "$ip_addr" "$prefix" "$gw" "$dns1" "$dns2" >/dev/null 2>&1
+}
+
 write_ack "vespera-netd started $(date)"
 # Do not remount at daemon start: Helper powers the HD off while Vespera is
 # offline and mounts again when the telescope comes online (or via Monta).
@@ -990,6 +1223,7 @@ power_off_hd_at_boot() {
   eject_disk "$spec"
 }
 power_off_hd_at_boot
+eth_restore_from_state
 
 handle_cmd() {
   line="$1"
@@ -997,9 +1231,14 @@ handle_cmd() {
   a=$(echo "$line" | cut -d'|' -f2)
   b=$(echo "$line" | cut -d'|' -f3)
   c=$(echo "$line" | cut -d'|' -f4)
+  d=$(echo "$line" | cut -d'|' -f5)
+  e=$(echo "$line" | cut -d'|' -f6)
   case "$cmd" in
     promote) promote "$a" "$b" ;;
     route) apply_route ;;
+    eth-status) eth_status ;;
+    eth-dhcp) eth_apply_dhcp ;;
+    eth-static) eth_apply_static "$a" "$b" "$c" "$d" "$e" ;;
     restart-singularity)
       front_tid=$(front_task_id)
       am force-stop "$SINGULARITY_PKG" 2>/dev/null
@@ -1169,6 +1408,8 @@ while true; do
   consume_req "$DISK_REQ" && handled=1
   consume_req "$PROBE_REQ" && handled=1
   consume_req "$SINGULARITY_REQ" && handled=1
+  # Ethernet IP config must not race with set-clock / route on net.req.
+  consume_req "$ETH_REQ" && handled=1
   consume_req "$REQ_FILE" && handled=1
   WATCH=$((WATCH + 1))
   if [ "$WATCH" -ge 8 ]; then

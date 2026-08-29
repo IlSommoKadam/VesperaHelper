@@ -300,6 +300,102 @@ final class VesperaCommandClient {
     }
 
     /**
+     * Tries to write observatory coordinates with the same Ed25519 POST/PUT
+     * used by park/init. Does not start auto-init and does not upload SWU.
+     */
+    static Result setLocation(String host, int apiPort, Network network,
+            VesperaLocationClient.Site site) {
+        if (site == null) return new Result(false, -1, "no_site");
+        if (host == null || host.isEmpty()) host = "10.0.0.1";
+        int port = apiPort > 0 ? apiPort : 8082;
+        if (port == 8083) port = 8082;
+        VesperaStatusClient.Result status = VesperaStatusClient.fetchResult(host, port, network);
+        VesperaStatusSnapshot snap = status.snapshot;
+        if (snap == null) {
+            String detail = status.error.isEmpty() ? "status_unavailable" : status.error;
+            return new Result(false, -1, "status_unavailable: " + detail);
+        }
+        if (!snap.canSignCommands()) {
+            return new Result(false, -1, snap.authMissingCode());
+        }
+        String authorization = VesperaApiAuth.authorizationHeader(snap);
+        if (authorization.isEmpty()) {
+            return new Result(false, -1, "auth_sign_failed");
+        }
+        String timed = autoInitBody(site);
+        String pair = latLonBody(site);
+        String nested = nestedLocationBody(site);
+        if (timed.isEmpty() || pair.isEmpty()) {
+            return new Result(false, -1, "no_site");
+        }
+        String[][] attempts = new String[][] {
+                {"POST", "/v1/settings", timed},
+                {"POST", "/v1/settings", pair},
+                {"PUT", "/v1/settings", timed},
+                {"PUT", "/v1/settings", pair},
+                {"POST", "/v1/settings/location", pair},
+                {"POST", "/v1/device/location", pair},
+                {"POST", "/v1/device/settings", pair},
+                {"POST", "/v1/general/setLocation", timed},
+                {"POST", "/v1/general/location", timed},
+                {"POST", "/v1/app/location", pair},
+                {"POST", "/v1/location", pair},
+                {"POST", "/dev-location", pair},
+                {"POST", "/v1/settings", nested}
+        };
+        Result last = new Result(false, -1, "no_location_endpoint");
+        try {
+            for (String[] attempt : attempts) {
+                String method = attempt[0];
+                String path = attempt[1];
+                String body = attempt[2];
+                VesperaHttp.Response response = "PUT".equals(method)
+                        ? VesperaHttp.put(network, host, port, path, body, authorization, 2_500)
+                        : VesperaHttp.post(network, host, port, path, body, authorization, 2_500);
+                Log.i(TAG, "setLocation " + method + " " + path + " → " + response.code);
+                if (response.code == 401) {
+                    return new Result(false, 401, "auth_required");
+                }
+                boolean ok = response.code >= 200 && response.code < 300
+                        && !isFirmwareFailure(response.body);
+                if (ok) {
+                    return new Result(true, response.code, method + " " + path);
+                }
+            }
+            return last;
+        } catch (Exception failure) {
+            Log.w(TAG, "setLocation: " + failure.getMessage());
+            return new Result(false, -1, failure.getMessage());
+        }
+    }
+
+    private static String latLonBody(VesperaLocationClient.Site site) {
+        if (site == null) return "";
+        try {
+            JSONObject body = new JSONObject();
+            body.put("latitude", site.lat);
+            body.put("longitude", site.lon);
+            return body.toString();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static String nestedLocationBody(VesperaLocationClient.Site site) {
+        if (site == null) return "";
+        try {
+            JSONObject loc = new JSONObject();
+            loc.put("latitude", site.lat);
+            loc.put("longitude", site.lon);
+            JSONObject body = new JSONObject();
+            body.put("location", loc);
+            return body.toString();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    /**
      * Firmware {@code startAutoInit} requires {@code time} (Date.now ms),
      * {@code latitude} and {@code longitude}. Empty {@code {}} is rejected with
      * CHECKPARAMS.INCORRECT_PARAMS.

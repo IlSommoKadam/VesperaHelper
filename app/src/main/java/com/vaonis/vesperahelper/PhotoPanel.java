@@ -6,7 +6,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.net.Network;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -14,7 +13,6 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -22,9 +20,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.util.List;
-import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /** Builds and refreshes the Foto tab (USB HD + night/reconnect FTP sync). */
 final class PhotoPanel {
@@ -53,11 +48,6 @@ final class PhotoPanel {
     private final EditText nightIntervalInput;
     private final EditText dayStartHourInput;
     private final EditText dayEndHourInput;
-    private final EditText cityInput;
-    private final LinearLayout cityResults;
-    private final Button citySearch;
-    private final Button vesperaLocation;
-    private final TextView locationStatus;
     private final Button applyInterval;
     private final TextView syncStatus;
     private final Button syncNow;
@@ -67,7 +57,6 @@ final class PhotoPanel {
     private final TextView overlayHint;
     private final TextView ftpStatus;
     private final TextView ftpHint;
-    private final ExecutorService geoWorker = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean receiverRegistered;
     private String selectedId = "";
@@ -237,44 +226,6 @@ final class PhotoPanel {
         dayEndRow.addView(dayEndHourInput);
         dayEndRow.addView(hourUnit2);
 
-        TextView cityLabel = body(activity.getString(R.string.photo_sync_city_label));
-        LinearLayout cityRow = new LinearLayout(activity);
-        cityRow.setOrientation(LinearLayout.HORIZONTAL);
-        cityRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        cityInput = new EditText(activity);
-        cityInput.setHint(R.string.photo_sync_city_hint);
-        cityInput.setSingleLine(true);
-        cityInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-        cityInput.setLayoutParams(new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        if (syncStore.hasSite() && PhotoSyncStore.SITE_CITY.equals(syncStore.siteSource())) {
-            cityInput.setText(syncStore.siteLabel());
-        }
-        cityInput.setOnEditorActionListener((v, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
-                searchCity();
-                return true;
-            }
-            return false;
-        });
-        citySearch = new Button(activity);
-        citySearch.setAllCaps(false);
-        citySearch.setText(R.string.photo_sync_city_search);
-        UiStyle.applyRaised(citySearch, COLOR_CONNECTING, true);
-        LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        searchLp.setMarginStart((int) (8 * density));
-        citySearch.setLayoutParams(searchLp);
-        citySearch.setOnClickListener(v -> searchCity());
-        cityRow.addView(cityInput);
-        cityRow.addView(citySearch);
-        cityResults = new LinearLayout(activity);
-        cityResults.setOrientation(LinearLayout.VERTICAL);
-        vesperaLocation = action(activity.getString(R.string.photo_sync_vespera_location), COLOR_CONNECTING);
-        vesperaLocation.setOnClickListener(v -> fetchVesperaSite());
-        locationStatus = body(locationText());
-        locationStatus.setTextSize(13);
-
         LinearLayout syncBox = new LinearLayout(activity);
         syncBox.setOrientation(LinearLayout.VERTICAL);
         int boxPad = (int) (12 * density);
@@ -290,11 +241,6 @@ final class PhotoPanel {
         syncBox.addView(nightIntervalRow);
         syncBox.addView(dayStartRow);
         syncBox.addView(dayEndRow);
-        syncBox.addView(cityLabel);
-        syncBox.addView(cityRow);
-        syncBox.addView(cityResults);
-        syncBox.addView(vesperaLocation);
-        syncBox.addView(locationStatus);
         syncBox.addView(applyInterval);
 
         syncStatus = body(activity.getString(R.string.photo_sync_idle));
@@ -437,7 +383,6 @@ final class PhotoPanel {
             savedLabel.setText(savedText());
             syncWindow.setText(windowText());
             refreshHourFields();
-            locationStatus.setText(locationText());
             refreshMountButtons();
             refreshCopyButtons(intent.getBooleanExtra(PhotoSyncService.EXTRA_SYNCING, false));
             refreshHdSpace();
@@ -613,105 +558,10 @@ final class PhotoPanel {
 
         nightIntervalInput.setText(PhotoSyncStore.formatIntervalHours(nightHours));
         refreshHourFields();
-        locationStatus.setText(locationText());
 
         syncWindow.setText(windowText());
         activity.startForegroundService(new Intent(activity, PhotoSyncService.class)
                 .setAction(PhotoSyncService.ACTION_LIST_DISKS));
-    }
-
-    private void searchCity() {
-        hideKeyboard(cityInput);
-        final String query = cityInput.getText() == null ? "" : cityInput.getText().toString().trim();
-        scroll.runKeepingScroll(() -> cityResults.removeAllViews());
-        if (query.length() < 2) {
-            locationStatus.setText(R.string.photo_sync_city_none);
-            return;
-        }
-        locationStatus.setText(R.string.photo_sync_city_searching);
-        citySearch.setEnabled(false);
-        final String language = AppLocale.getLanguage(activity);
-        geoWorker.execute(() -> {
-            try {
-                final List<CityGeocoder.Hit> hits = CityGeocoder.search(query, language);
-                mainHandler.post(() -> {
-                    citySearch.setEnabled(true);
-                    bindCityHits(hits);
-                });
-            } catch (Exception failure) {
-                mainHandler.post(() -> {
-                    citySearch.setEnabled(true);
-                    scroll.runKeepingScroll(() -> {
-                        cityResults.removeAllViews();
-                        locationStatus.setText(R.string.photo_sync_city_error);
-                    });
-                });
-            }
-        });
-    }
-
-    private void bindCityHits(List<CityGeocoder.Hit> hits) {
-        scroll.runKeepingScroll(() -> {
-            cityResults.removeAllViews();
-            if (hits == null || hits.isEmpty()) {
-                locationStatus.setText(R.string.photo_sync_city_none);
-                return;
-            }
-            locationStatus.setText(locationText());
-            for (CityGeocoder.Hit hit : hits) {
-                Button row = new Button(activity);
-                row.setAllCaps(false);
-                row.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
-                row.setText(hit.label);
-                UiStyle.applyRaised(row, UiStyle.SLATE, true);
-                row.setOnClickListener(v -> applySite(hit.lat, hit.lon, hit.label,
-                        PhotoSyncStore.SITE_CITY, hit.countryCode));
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                lp.bottomMargin = (int) (4 * density);
-                row.setLayoutParams(lp);
-                cityResults.addView(row);
-            }
-        });
-    }
-
-    private void fetchVesperaSite() {
-        if (!VesperaConnectionService.STATUS_CONNECTED.equals(
-                VesperaConnectionService.getLastStatus())) {
-            locationStatus.setText(R.string.photo_sync_vespera_need);
-            return;
-        }
-        locationStatus.setText(R.string.photo_sync_vespera_reading);
-        vesperaLocation.setEnabled(false);
-        final Network network = VesperaConnectionService.getActiveNetwork();
-        geoWorker.execute(() -> {
-            final VesperaLocationClient.Site site = VesperaLocationClient.fetch(network);
-            mainHandler.post(() -> {
-                vesperaLocation.setEnabled(true);
-                if (site == null) {
-                    locationStatus.setText(R.string.photo_sync_vespera_fail);
-                    return;
-                }
-                String label = activity.getString(R.string.photo_sync_vespera_ok, site.lat, site.lon);
-                applySite(site.lat, site.lon, label, PhotoSyncStore.SITE_VESPERA, "");
-            });
-        });
-    }
-
-    private void applySite(double lat, double lon, String label, String source, String countryCode) {
-        locationStatus.setText(R.string.photo_sync_clock_syncing);
-        geoWorker.execute(() -> {
-            syncStore.setSite(lat, lon, label, source, countryCode);
-            mainHandler.post(() -> {
-                scroll.pin();
-                cityResults.removeAllViews();
-                if (PhotoSyncStore.SITE_CITY.equals(source)) {
-                    cityInput.setText(label);
-                }
-                activity.startForegroundService(new Intent(activity, PhotoSyncService.class)
-                        .setAction(PhotoSyncService.ACTION_SYNC_CLOCK));
-            });
-        });
     }
 
     private void refreshHourFields() {
@@ -720,36 +570,6 @@ final class PhotoPanel {
         }
         if (!dayEndHourInput.hasFocus()) {
             dayEndHourInput.setText(String.valueOf(syncStore.dayEndHour()));
-        }
-    }
-
-    private String locationText() {
-        if (syncStore.autoHours()) {
-            String label = syncStore.siteLabel();
-            if (label == null || label.isEmpty()) {
-                label = String.format(Locale.US, "%.2f, %.2f",
-                        syncStore.siteLat(), syncStore.siteLon());
-            }
-            String auto = activity.getString(R.string.photo_sync_location_auto,
-                    label, syncStore.dayEndHour(), syncStore.dayStartHour());
-            String tz = syncStore.siteTimeZone();
-            if (tz != null && !tz.isEmpty()) {
-                auto += "\n" + activity.getString(R.string.photo_sync_clock_tz, tz);
-            }
-            auto += "\n" + activity.getString(syncStore.lastNtpOk()
-                    ? R.string.photo_sync_clock_ok : R.string.photo_sync_clock_pending);
-            return auto;
-        }
-        if (syncStore.hasSite()) {
-            return activity.getString(R.string.photo_sync_location_manual);
-        }
-        return activity.getString(R.string.photo_sync_location_unset);
-    }
-
-    private void hideKeyboard(View view) {
-        InputMethodManager imm = activity.getSystemService(InputMethodManager.class);
-        if (imm != null && view != null) {
-            imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
         }
     }
 

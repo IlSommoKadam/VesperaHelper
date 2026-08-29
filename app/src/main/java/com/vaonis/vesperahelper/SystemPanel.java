@@ -7,11 +7,14 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.net.Network;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -25,6 +28,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** Tab Sistema: elenco delle attività automatiche, con check e un unico Salva. */
 final class SystemPanel {
@@ -51,9 +56,19 @@ final class SystemPanel {
     private final Row watchdog;
     private final Row ftpLocal;
     private final Row keepAlive;
+    private EditText cityInput;
+    private LinearLayout cityResults;
+    private Button citySearch;
+    private EditText siteCoordsInput;
+    private Button vesperaLocation;
+    private TextView locationStatus;
+    private TextView vesperaGpsBody;
+    private Button vesperaGpsRefresh;
+    private Button vesperaGpsSend;
+    private VesperaLocationClient.Site lastVesperaGps;
+    private boolean gpsFetching;
+    private boolean siteSaving;
     private CheckBox weatherEnable;
-    private EditText weatherLat;
-    private EditText weatherLon;
     private EditText weatherInterval;
     private EditText weatherLookAhead;
     private EditText weatherThreshold;
@@ -61,6 +76,7 @@ final class SystemPanel {
     private TextView weatherInfo;
     private final TextView saveResult;
     private final TextView logBody;
+    private final ExecutorService geoWorker = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean visible;
     private boolean logReceiverRegistered;
@@ -85,11 +101,15 @@ final class SystemPanel {
         layout.setLayoutParams(new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
 
+        addSiteGroup(layout);
+        addVesperaGpsGroup(layout);
         layout.addView(title(activity.getString(R.string.system_tab_title)));
         layout.addView(body(activity.getString(R.string.system_tab_intro)));
         logBody = addLogBox(layout);
 
         SystemSettingsStore.Snapshot snap = settings.snapshot();
+
+        addWeatherGroup(layout);
 
         LinearLayout photoGroup = addGroup(layout, R.string.system_group_photo_sync, 0);
         photoSync = addRow(photoGroup, activity.getString(R.string.system_photo_sync_title), snap.photoSync);
@@ -109,8 +129,6 @@ final class SystemPanel {
         sunHd = addRow(sunGroup, activity.getString(R.string.system_sun_hd_title), snap.sunHdShutdown);
         sunPiShutdown = addRow(sunGroup, activity.getString(R.string.system_sun_pi_title),
                 snap.sunPiShutdown);
-
-        addWeatherGroup(layout);
 
         LinearLayout connGroup = addGroup(layout, R.string.system_group_connection, 0);
         wifiConnect = addRow(connGroup, activity.getString(R.string.system_wifi_title), snap.wifiConnect);
@@ -153,6 +171,9 @@ final class SystemPanel {
     void onVisible() {
         visible = true;
         loadChecks();
+        fillCoordFields();
+        if (locationStatus != null) locationStatus.setText(locationText());
+        refreshVesperaGps(true);
         refreshInfo();
         refreshLog();
         saveResult.setText("");
@@ -209,8 +230,6 @@ final class SystemPanel {
     private void loadWeather() {
         WeatherProtectionStore.Config cfg = weatherStore.config();
         weatherEnable.setChecked(cfg.enabled);
-        weatherLat.setText(displayLatitude(cfg));
-        weatherLon.setText(displayLongitude(cfg));
         weatherInterval.setText(String.valueOf(cfg.checkIntervalMin));
         weatherLookAhead.setText(String.valueOf(cfg.lookAheadMin));
         weatherThreshold.setText(formatThreshold(cfg.thresholdMm));
@@ -237,6 +256,7 @@ final class SystemPanel {
         snap.ftpLocal = ftpLocal.check.isChecked();
         snap.keepAlive = keepAlive.check.isChecked();
         settings.save(snap);
+        applyManualCoordsIfPresent();
         saveWeather();
         PhotoSyncService.applySettings(activity);
         if (activity instanceof MainActivity) {
@@ -273,13 +293,18 @@ final class SystemPanel {
         keepAlive.info.setText(prefixed(snap.keepAlive,
                 activity.getString(R.string.system_keepalive_info)));
         if (weatherInfo != null) weatherInfo.setText(weatherInfoText());
+        if (locationStatus != null && !siteSaving
+                && (siteCoordsInput == null || !siteCoordsInput.hasFocus())
+                && (cityInput == null || !cityInput.hasFocus())) {
+            locationStatus.setText(locationText());
+        }
+        if (!gpsFetching) refreshVesperaGps(false);
     }
 
     private void saveWeather() {
-        WeatherProtectionStore.Config cfg = new WeatherProtectionStore.Config();
+        WeatherProtectionStore.Config cfg = weatherStore.config();
         cfg.enabled = weatherEnable.isChecked();
-        cfg.latitude = weatherLat.getText().toString().trim();
-        cfg.longitude = weatherLon.getText().toString().trim();
+        // Coordinates live with the site city (top of Sistema); keep any stored values.
         cfg.checkIntervalMin = parseIntOr(weatherInterval.getText().toString(),
                 WeatherProtectionStore.DEFAULT_CHECK_INTERVAL_MIN);
         cfg.lookAheadMin = parseIntOr(weatherLookAhead.getText().toString(),
@@ -554,6 +579,472 @@ final class SystemPanel {
         return format.format(new Date(timeMs));
     }
 
+    private void addSiteGroup(LinearLayout layout) {
+        LinearLayout box = addGroup(layout, R.string.system_group_site,
+                R.string.system_group_site_intro);
+
+        addWeatherLabel(box, activity.getString(R.string.photo_sync_city_label));
+        LinearLayout cityRow = new LinearLayout(activity);
+        cityRow.setOrientation(LinearLayout.HORIZONTAL);
+        cityRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        cityInput = new EditText(activity);
+        cityInput.setHint(R.string.photo_sync_city_hint);
+        cityInput.setSingleLine(true);
+        cityInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        cityInput.setLayoutParams(new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        if (syncStore.hasSite() && PhotoSyncStore.SITE_CITY.equals(syncStore.siteSource())) {
+            cityInput.setText(syncStore.siteLabel());
+        }
+        cityInput.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                searchCity();
+                return true;
+            }
+            return false;
+        });
+        citySearch = new Button(activity);
+        citySearch.setAllCaps(false);
+        citySearch.setText(R.string.photo_sync_city_search);
+        UiStyle.applyRaised(citySearch, UiStyle.SLATE, true);
+        LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        searchLp.setMarginStart((int) (8 * density));
+        citySearch.setLayoutParams(searchLp);
+        citySearch.setOnClickListener(v -> searchCity());
+        cityRow.addView(cityInput);
+        cityRow.addView(citySearch);
+        box.addView(cityRow);
+
+        cityResults = new LinearLayout(activity);
+        cityResults.setOrientation(LinearLayout.VERTICAL);
+        box.addView(cityResults);
+
+        siteCoordsInput = addWeatherField(box, R.string.photo_sync_coords_label, "",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        siteCoordsInput.setHint(R.string.photo_sync_coords_hint);
+        siteCoordsInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        siteCoordsInput.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                applyManualCoords();
+                return true;
+            }
+            return false;
+        });
+        fillCoordFields();
+
+        vesperaLocation = new Button(activity);
+        vesperaLocation.setAllCaps(true);
+        vesperaLocation.setText(R.string.photo_sync_vespera_location);
+        UiStyle.applyRaised(vesperaLocation, UiStyle.SLATE, true);
+        LinearLayout.LayoutParams vesperaLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        vesperaLp.topMargin = (int) (8 * density);
+        vesperaLp.bottomMargin = (int) (4 * density);
+        vesperaLocation.setLayoutParams(vesperaLp);
+        vesperaLocation.setOnClickListener(v -> applyManualCoords());
+        box.addView(vesperaLocation);
+
+        locationStatus = new TextView(activity);
+        locationStatus.setTextSize(13);
+        locationStatus.setTextColor(0xFF455A64);
+        locationStatus.setPadding(0, (int) (4 * density), 0, 0);
+        locationStatus.setText(locationText());
+        box.addView(locationStatus);
+    }
+
+    private void addVesperaGpsGroup(LinearLayout layout) {
+        LinearLayout box = addGroup(layout, R.string.system_group_vespera_gps,
+                R.string.system_group_vespera_gps_intro);
+
+        vesperaGpsBody = new TextView(activity);
+        vesperaGpsBody.setTextSize(13);
+        vesperaGpsBody.setTextColor(0xFF455A64);
+        vesperaGpsBody.setLineSpacing(0, 1.15f);
+        vesperaGpsBody.setPadding(0, 0, 0, (int) (8 * density));
+        box.addView(vesperaGpsBody);
+
+        vesperaGpsRefresh = new Button(activity);
+        vesperaGpsRefresh.setAllCaps(true);
+        vesperaGpsRefresh.setText(R.string.system_gps_refresh);
+        UiStyle.applyRaised(vesperaGpsRefresh, UiStyle.SLATE, true);
+        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        vesperaGpsRefresh.setLayoutParams(refreshLp);
+        vesperaGpsRefresh.setOnClickListener(v -> refreshVesperaGps(true));
+        box.addView(vesperaGpsRefresh);
+
+        vesperaGpsSend = new Button(activity);
+        vesperaGpsSend.setAllCaps(true);
+        vesperaGpsSend.setText(R.string.system_gps_send);
+        UiStyle.applyRaised(vesperaGpsSend, UiStyle.SLATE, true);
+        LinearLayout.LayoutParams sendLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sendLp.topMargin = (int) (6 * density);
+        vesperaGpsSend.setLayoutParams(sendLp);
+        vesperaGpsSend.setOnClickListener(v -> sendSiteToVespera());
+        box.addView(vesperaGpsSend);
+        bindVesperaGps();
+    }
+
+    private void refreshVesperaGps(boolean forceNetwork) {
+        if (vesperaGpsBody == null) return;
+        TelescopeStatusHub hub = TelescopeStatusHub.get();
+        VesperaStatusSnapshot snap = hub == null ? null : hub.lastSnapshot();
+        VesperaLocationClient.Site fromSnap = VesperaLocationClient.fromSnapshot(snap);
+        if (fromSnap != null) lastVesperaGps = fromSnap;
+
+        boolean connected = vesperaConnected();
+        if (!forceNetwork || !connected) {
+            bindVesperaGps();
+            return;
+        }
+        if (gpsFetching) return;
+        gpsFetching = true;
+        setGpsButtonsEnabled(false);
+        vesperaGpsBody.setTextColor(0xFF455A64);
+        vesperaGpsBody.setText(R.string.system_gps_reading);
+        final Network network = VesperaConnectionService.getActiveNetwork();
+        geoWorker.execute(() -> {
+            VesperaLocationClient.Site site = VesperaLocationClient.fetch(network);
+            if (site == null) {
+                TelescopeStatusHub live = TelescopeStatusHub.get();
+                site = VesperaLocationClient.fromSnapshot(live == null ? null : live.lastSnapshot());
+            }
+            final VesperaLocationClient.Site found = site;
+            mainHandler.post(() -> {
+                gpsFetching = false;
+                if (found != null) lastVesperaGps = found;
+                bindVesperaGps();
+            });
+        });
+    }
+
+    private void sendSiteToVespera() {
+        if (vesperaGpsBody == null) return;
+        if (!vesperaConnected()) {
+            vesperaGpsBody.setTextColor(0xFF455A64);
+            vesperaGpsBody.setText(R.string.system_gps_offline);
+            return;
+        }
+        if (!syncStore.hasSite()) {
+            vesperaGpsBody.setTextColor(0xFF455A64);
+            vesperaGpsBody.setText(R.string.system_gps_no_site);
+            return;
+        }
+        if (gpsFetching) return;
+        gpsFetching = true;
+        setGpsButtonsEnabled(false);
+        vesperaGpsBody.setTextColor(0xFF455A64);
+        vesperaGpsBody.setText(R.string.system_gps_sending);
+        final Network network = VesperaConnectionService.getActiveNetwork();
+        final int apiPort = InstrumentWatchdog.lastApiPort();
+        final VesperaLocationClient.Site site = new VesperaLocationClient.Site(
+                syncStore.siteLat(), syncStore.siteLon());
+        geoWorker.execute(() -> {
+            VesperaCommandClient.Result result = VesperaCommandClient.setLocation(
+                    "10.0.0.1", apiPort, network, site);
+            VesperaLocationClient.Site readBack = null;
+            if (result.success) {
+                readBack = VesperaLocationClient.fetch(network);
+                if (readBack == null) {
+                    TelescopeStatusHub live = TelescopeStatusHub.get();
+                    readBack = VesperaLocationClient.fromSnapshot(
+                            live == null ? null : live.lastSnapshot());
+                }
+            }
+            final VesperaCommandClient.Result sent = result;
+            final VesperaLocationClient.Site found = readBack;
+            mainHandler.post(() -> {
+                gpsFetching = false;
+                if (found != null) lastVesperaGps = found;
+                bindVesperaGps();
+                appendGpsSendResult(sent);
+            });
+        });
+    }
+
+    private void appendGpsSendResult(VesperaCommandClient.Result result) {
+        if (vesperaGpsBody == null || result == null) return;
+        String extra;
+        int color = 0xFF455A64;
+        if (result.success) {
+            extra = activity.getString(R.string.system_gps_send_ok, result.message);
+            color = UiStyle.GREEN;
+        } else if ("no_location_endpoint".equals(result.message)) {
+            extra = activity.getString(R.string.system_gps_send_no_endpoint);
+            color = UiStyle.AMBER;
+        } else if ("auth_required".equals(result.message)
+                || "auth_sign_failed".equals(result.message)) {
+            extra = activity.getString(R.string.telescope_command_auth);
+        } else if ("auth_missing_challenge".equals(result.message)) {
+            extra = activity.getString(R.string.telescope_command_auth_missing_challenge);
+        } else if ("auth_missing_id".equals(result.message)
+                || "auth_missing".equals(result.message)) {
+            extra = activity.getString(R.string.telescope_command_auth_missing);
+        } else if (result.message != null && result.message.startsWith("status_unavailable")) {
+            extra = activity.getString(R.string.status_tab_api_unavailable);
+        } else {
+            extra = activity.getString(R.string.system_gps_send_fail,
+                    result.message == null ? "—" : result.message);
+            color = UiStyle.AMBER;
+        }
+        CharSequence current = vesperaGpsBody.getText();
+        vesperaGpsBody.setTextColor(color);
+        vesperaGpsBody.setText((current == null ? "" : current) + "\n" + extra);
+    }
+
+    private void setGpsButtonsEnabled(boolean enabled) {
+        if (vesperaGpsRefresh != null) {
+            vesperaGpsRefresh.setEnabled(enabled);
+            UiStyle.applyRaised(vesperaGpsRefresh, enabled ? UiStyle.SLATE : UiStyle.STEEL, enabled);
+        }
+        if (vesperaGpsSend != null) {
+            boolean canSend = enabled && vesperaConnected() && syncStore.hasSite();
+            vesperaGpsSend.setEnabled(canSend);
+            UiStyle.applyRaised(vesperaGpsSend, canSend ? UiStyle.SLATE : UiStyle.STEEL, canSend);
+        }
+    }
+
+    private void bindVesperaGps() {
+        if (vesperaGpsBody == null) return;
+        boolean connected = vesperaConnected();
+        TelescopeStatusHub hub = TelescopeStatusHub.get();
+        VesperaStatusSnapshot snap = hub == null ? null : hub.lastSnapshot();
+        StringBuilder text = new StringBuilder();
+        int color = 0xFF455A64;
+
+        if (lastVesperaGps != null) {
+            text.append(activity.getString(R.string.system_gps_coords,
+                    WeatherProtectionStore.formatCoord(lastVesperaGps.lat),
+                    WeatherProtectionStore.formatCoord(lastVesperaGps.lon)));
+            if (snap != null && snap.firmware != null && !snap.firmware.isEmpty()) {
+                text.append('\n').append(activity.getString(R.string.system_gps_firmware, snap.firmware));
+            }
+            if (!connected) {
+                text.append('\n').append(activity.getString(R.string.system_gps_offline));
+            } else if (!syncStore.hasSite()) {
+                text.append('\n').append(activity.getString(R.string.system_gps_no_site));
+            } else {
+                int meters = (int) Math.round(VesperaLocationClient.distanceMeters(
+                        syncStore.siteLat(), syncStore.siteLon(),
+                        lastVesperaGps.lat, lastVesperaGps.lon));
+                if (meters <= 100) {
+                    text.append('\n').append(activity.getString(R.string.system_gps_match, meters));
+                    color = UiStyle.GREEN;
+                } else {
+                    text.append('\n').append(activity.getString(R.string.system_gps_mismatch, meters));
+                    color = UiStyle.AMBER;
+                    text.append('\n').append(activity.getString(R.string.system_gps_hint_send));
+                }
+            }
+        } else if (!connected) {
+            text.append(activity.getString(R.string.system_gps_offline));
+        } else {
+            text.append(activity.getString(R.string.system_gps_missing));
+            if (syncStore.hasSite()) {
+                text.append('\n').append(activity.getString(R.string.system_gps_hint_send));
+            }
+        }
+        vesperaGpsBody.setTextColor(color);
+        vesperaGpsBody.setText(text.toString());
+        setGpsButtonsEnabled(!gpsFetching);
+    }
+
+    private static boolean vesperaConnected() {
+        return VesperaConnectionService.STATUS_CONNECTED.equals(
+                VesperaConnectionService.getLastStatus());
+    }
+
+    private void searchCity() {
+        hideKeyboard(cityInput);
+        final String query = cityInput.getText() == null ? "" : cityInput.getText().toString().trim();
+        scroll.runKeepingScroll(() -> cityResults.removeAllViews());
+        if (query.length() < 2) {
+            locationStatus.setText(R.string.photo_sync_city_none);
+            return;
+        }
+        locationStatus.setText(R.string.photo_sync_city_searching);
+        citySearch.setEnabled(false);
+        final String language = AppLocale.getLanguage(activity);
+        geoWorker.execute(() -> {
+            try {
+                final List<CityGeocoder.Hit> hits = CityGeocoder.search(activity, query, language);
+                mainHandler.post(() -> {
+                    citySearch.setEnabled(true);
+                    bindCityHits(hits);
+                });
+            } catch (Exception failure) {
+                mainHandler.post(() -> {
+                    citySearch.setEnabled(true);
+                    scroll.runKeepingScroll(() -> {
+                        cityResults.removeAllViews();
+                        locationStatus.setText(R.string.photo_sync_city_error);
+                    });
+                });
+            }
+        });
+    }
+
+    private void bindCityHits(List<CityGeocoder.Hit> hits) {
+        scroll.runKeepingScroll(() -> {
+            cityResults.removeAllViews();
+            if (hits == null || hits.isEmpty()) {
+                locationStatus.setText(R.string.photo_sync_city_none);
+                return;
+            }
+            locationStatus.setText(locationText());
+            for (CityGeocoder.Hit hit : hits) {
+                Button row = new Button(activity);
+                row.setAllCaps(false);
+                row.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
+                row.setText(hit.label);
+                UiStyle.applyRaised(row, UiStyle.SLATE, true);
+                row.setOnClickListener(v -> applySite(hit.lat, hit.lon, hit.label,
+                        PhotoSyncStore.SITE_CITY, hit.countryCode));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                lp.bottomMargin = (int) (4 * density);
+                row.setLayoutParams(lp);
+                cityResults.addView(row);
+            }
+        });
+    }
+
+    private void applySite(double lat, double lon, String label, String source, String countryCode) {
+        siteSaving = true;
+        locationStatus.setText(R.string.photo_sync_clock_syncing);
+        geoWorker.execute(() -> {
+            syncStore.setSite(lat, lon, label, source, countryCode);
+            weatherStore.setCoordinates(lat, lon);
+            mainHandler.post(() -> bindSavedSite(label));
+        });
+    }
+
+    private void bindSavedSite(String label) {
+        siteSaving = false;
+        scroll.pin();
+        if (cityResults != null) cityResults.removeAllViews();
+        if (cityInput != null && label != null && !label.isEmpty()) {
+            cityInput.setText(label);
+        }
+        if (siteCoordsInput != null) siteCoordsInput.clearFocus();
+        if (cityInput != null) cityInput.clearFocus();
+        fillCoordFields(true);
+        locationStatus.setText(locationText());
+        bindVesperaGps();
+        if (weatherInfo != null) weatherInfo.setText(weatherInfoText());
+        activity.startForegroundService(new Intent(activity, PhotoSyncService.class)
+                .setAction(PhotoSyncService.ACTION_SYNC_CLOCK));
+        if (activity instanceof MainActivity) {
+            ((MainActivity) activity).refreshNightForecast();
+        }
+    }
+
+    private void applyManualCoordsIfPresent() {
+        if (siteCoordsInput == null) return;
+        String raw = siteCoordsInput.getText() == null
+                ? "" : siteCoordsInput.getText().toString().trim();
+        if (raw.isEmpty()) return;
+        double[] pair = WeatherProtectionStore.parseLatLon(raw);
+        if (pair == null) return;
+        if (sameSiteCoords(pair[0], pair[1])) return;
+        applyManualCoords();
+    }
+
+    private void applyManualCoords() {
+        hideKeyboard(siteCoordsInput);
+        hideKeyboard(cityInput);
+        double[] pair = WeatherProtectionStore.parseLatLon(
+                siteCoordsInput.getText() == null ? "" : siteCoordsInput.getText().toString());
+        if (pair == null) {
+            locationStatus.setText(R.string.photo_sync_coords_invalid);
+            return;
+        }
+        final double lat = pair[0];
+        final double lon = pair[1];
+        siteSaving = true;
+        locationStatus.setText(R.string.photo_sync_city_searching);
+        setSiteButtonsEnabled(false);
+        final String language = AppLocale.getLanguage(activity);
+        geoWorker.execute(() -> {
+            CityGeocoder.Hit found = null;
+            try {
+                found = CityGeocoder.reverse(activity, lat, lon, language);
+            } catch (Exception ignored) {
+            }
+            final CityGeocoder.Hit hit = found;
+            mainHandler.post(() -> {
+                setSiteButtonsEnabled(true);
+                if (hit != null && hit.label != null && !hit.label.isEmpty()) {
+                    applySite(lat, lon, hit.label, PhotoSyncStore.SITE_CITY, hit.countryCode);
+                    return;
+                }
+                String label = String.format(Locale.US, "%.5f, %.5f", lat, lon);
+                applySite(lat, lon, label, PhotoSyncStore.SITE_MANUAL, "");
+            });
+        });
+    }
+
+    private boolean sameSiteCoords(double lat, double lon) {
+        if (!syncStore.hasSite()) return false;
+        return VesperaLocationClient.distanceMeters(
+                syncStore.siteLat(), syncStore.siteLon(), lat, lon) < 5;
+    }
+
+    private void setSiteButtonsEnabled(boolean enabled) {
+        if (citySearch != null) citySearch.setEnabled(enabled);
+        if (vesperaLocation != null) {
+            vesperaLocation.setEnabled(enabled);
+            UiStyle.applyRaised(vesperaLocation, enabled ? UiStyle.SLATE : UiStyle.STEEL, enabled);
+        }
+    }
+
+    private void fillCoordFields() {
+        fillCoordFields(false);
+    }
+
+    private void fillCoordFields(boolean force) {
+        if (siteCoordsInput == null) return;
+        if (!force && siteCoordsInput.hasFocus()) return;
+        if (!syncStore.hasSite()) {
+            siteCoordsInput.setText("");
+            return;
+        }
+        siteCoordsInput.setText(WeatherProtectionStore.formatLatLon(
+                syncStore.siteLat(), syncStore.siteLon()));
+    }
+
+    private String locationText() {
+        if (syncStore.autoHours()) {
+            String label = syncStore.siteLabel();
+            if (label == null || label.isEmpty()) {
+                label = String.format(Locale.US, "%.2f, %.2f",
+                        syncStore.siteLat(), syncStore.siteLon());
+            }
+            String auto = activity.getString(R.string.photo_sync_location_auto,
+                    label, syncStore.dayEndHour(), syncStore.dayStartHour());
+            String tz = syncStore.siteTimeZone();
+            if (tz != null && !tz.isEmpty()) {
+                auto += "\n" + activity.getString(R.string.photo_sync_clock_tz, tz);
+            }
+            auto += "\n" + activity.getString(syncStore.lastNtpOk()
+                    ? R.string.photo_sync_clock_ok : R.string.photo_sync_clock_pending);
+            return auto;
+        }
+        if (syncStore.hasSite()) {
+            return activity.getString(R.string.photo_sync_location_manual);
+        }
+        return activity.getString(R.string.photo_sync_location_unset);
+    }
+
+    private void hideKeyboard(View view) {
+        InputMethodManager imm = activity.getSystemService(InputMethodManager.class);
+        if (imm != null && view != null) {
+            imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
+        }
+    }
+
     private void addWeatherGroup(LinearLayout layout) {
         LinearLayout box = addGroup(layout, R.string.system_group_weather,
                 R.string.system_group_weather_intro);
@@ -568,15 +1059,6 @@ final class SystemPanel {
         weatherEnable.setTypeface(weatherEnable.getTypeface(), Typeface.BOLD);
         weatherEnable.setTextColor(0xFF1A237E);
         box.addView(weatherEnable);
-
-        weatherLat = addWeatherField(box, R.string.system_weather_latitude,
-                displayLatitude(cfg),
-                InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL
-                        | InputType.TYPE_NUMBER_FLAG_SIGNED);
-        weatherLon = addWeatherField(box, R.string.system_weather_longitude,
-                displayLongitude(cfg),
-                InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL
-                        | InputType.TYPE_NUMBER_FLAG_SIGNED);
 
         addWeatherLabel(box, activity.getString(R.string.system_weather_source,
                 WeatherProtectionStore.SOURCE_OPEN_METEO));
@@ -636,22 +1118,6 @@ final class SystemPanel {
         group.addView(view);
     }
 
-    private String displayLatitude(WeatherProtectionStore.Config cfg) {
-        if (cfg.latitude != null && !cfg.latitude.isEmpty()) return cfg.latitude;
-        if ((cfg.longitude == null || cfg.longitude.isEmpty()) && syncStore.hasSite()) {
-            return WeatherProtectionStore.formatCoord(syncStore.siteLat());
-        }
-        return "";
-    }
-
-    private String displayLongitude(WeatherProtectionStore.Config cfg) {
-        if (cfg.longitude != null && !cfg.longitude.isEmpty()) return cfg.longitude;
-        if ((cfg.latitude == null || cfg.latitude.isEmpty()) && syncStore.hasSite()) {
-            return WeatherProtectionStore.formatCoord(syncStore.siteLon());
-        }
-        return "";
-    }
-
     private String weatherInfoText() {
         WeatherProtectionStore.Config cfg = weatherStore.config();
         String base = activity.getString(R.string.system_weather_info);
@@ -659,8 +1125,12 @@ final class SystemPanel {
             return activity.getString(R.string.system_activity_off) + "\n" + base;
         }
         StringBuilder sb = new StringBuilder(base);
-        if (!weatherStore.hasCoordinates() && !syncStore.hasSite()) {
+        if (!syncStore.hasSite()) {
             sb.append('\n').append(activity.getString(R.string.system_weather_no_coords));
+        } else {
+            sb.append('\n').append(activity.getString(R.string.system_weather_coords_value,
+                    WeatherProtectionStore.formatCoord(syncStore.siteLat()),
+                    WeatherProtectionStore.formatCoord(syncStore.siteLon())));
         }
         long last = weatherStore.lastCheckAt();
         if (last > 0) {

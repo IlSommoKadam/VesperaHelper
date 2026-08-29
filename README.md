@@ -65,8 +65,30 @@ L'app mantiene una richiesta Wi-Fi generica e chiede al daemon root `tools/vespe
 | 0.6.93 | 140 | Controllo mattutino: spegne senza richiedere GENERAL_SUN_TOO_HIGH |
 | 0.6.94 | 141 | Spegni HD taglia VBUS (USB3 + USB2): `authorized=0` non fermava il disco |
 | 0.6.95 | 142 | NTP e Telegram solo su Ethernet/Internet (mai Wi‑Fi Vespera); niente retry/log senza rete |
+| 0.6.96 | 143 | Meteo in alto in Sistema; lat/lon sotto città (Foto); notifica Telegram pioggia |
+| 0.6.97 | 144 | Footer globale: previsioni notturne Open-Meteo a step di 3 h con icone |
+| 0.6.98 | 145 | Open-Meteo via DoH se DNS LAN rotto; footer mostra città delle previsioni |
+| 0.6.99 | 146 | Fix SSL verifier DoH/IP + fallback IP Open-Meteo sul Pi |
+| 0.6.100 | 147 | Open-Meteo via HTTPS+SNI manuale (Pi senza DNS) |
+| 0.7.0 | 148 | Posizione in Sistema; GPS Vespera ±100 m; comando coordinate firmato; footer con città sito |
+| 0.7.1 | 149 | Footer: città visibile subito (anche in caricamento/errore) |
+| 0.7.2 | 150 | Footer: messaggi errore meteo leggibili (niente stack Java) |
+| 0.7.3 | 151 | Connessioni: Ethernet DHCP / IP manuale via daemon vespera-netd |
+| 0.7.4 | 152 | Ethernet: etichette campi + verifica uplink dopo Applica |
+| 0.7.5 | 153 | Footer meteo compatto 1 riga: fino all\'alba, frecce giorno, oggi/domani |
+| 0.7.6 | 154 | Footer meteo: dimensioni raddoppiate (sempre 1 riga) |
+| 0.7.7 | 155 | Footer: ore HH:mm, frecce più grandi |
+| 0.7.8 | 156 | Footer: etichetta giorno = data · oggi/domani |
+| 0.7.9 | 157 | Footer: città più visibile |
+| 0.8.0 | 158 | Connessioni: sotto-tab Vespera / LAN |
+| 0.8.1 | 159 | LAN: testo chiaro + spia Internet/LAN/offline |
+| 0.8.2 | 160 | Ethernet: canale eth.req dedicato (niente race con set-clock) |
+| 0.8.3 | 161 | Salva GPS: reverse-geocode della città (non tiene più il nome precedente) |
+| 0.8.4 | 162 | Posizione: un solo campo lat, lon (incolla da Maps) |
+| 0.8.5 | 163 | Nominatim via DoH/IPv4 (GPS aggiorna la città sul Pi senza DNS LAN) |
+| 0.8.6 | 164 | Footer: bandiera nazione + pin città accanto al nome |
 
-Il daemon deve essere avviato come root sul Pi dopo il boot; l'app comunica con esso tramite `net.req` / `disk.req` nella propria directory esterna.
+Il daemon deve essere avviato come root sul Pi dopo il boot; l'app comunica con esso tramite `net.req` / `disk.req` nella propria directory esterna. Comandi Ethernet su `net.req`: `eth-status`, `eth-dhcp`, `eth-static|ip|prefix|gw|dns1|dns2` (ack su `net.ack`).
 
 ## Foto / HD USB
 

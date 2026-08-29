@@ -55,6 +55,13 @@ final class VesperaHttp {
         return post(network, host, port, path, jsonBody, authorization, timeoutMs, false);
     }
 
+    static Response put(Network network, String host, int port, String path, String jsonBody,
+            String authorization, int timeoutMs) throws IOException {
+        byte[] body = (jsonBody == null ? "{}" : jsonBody).getBytes(StandardCharsets.UTF_8);
+        return request(network, host, port, "PUT", path, "application/json", body,
+                authorization, null, timeoutMs, false);
+    }
+
     static Response post(Network network, String host, int port, String path, String jsonBody,
             String authorization, int timeoutMs, boolean acceptHangup) throws IOException {
         byte[] body = (jsonBody == null ? "{}" : jsonBody).getBytes(StandardCharsets.UTF_8);
