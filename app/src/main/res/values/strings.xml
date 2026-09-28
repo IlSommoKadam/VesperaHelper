@@ -523,7 +523,7 @@
     <string name="system_resume_sync_idle">Nessuna sync da riprendere.</string>
     <string name="system_hd_mount_title">Montaggio automatico HD</string>
     <string name="system_hd_power_off_title">Spegnimento HD</string>
-    <string name="system_hd_mount_info">Con Vespera online (API/FTP) monta l\'HD salvato. Non spegne più l\'HD in automatico (tagliare l\'USB spesso richiede di staccare e riattaccare il cavo per rimontarlo). Attiva/Monta e Spegni HD restano a mano.</string>
+    <string name="system_hd_mount_info">Con Vespera online (API/FTP) monta l\'HD salvato. Non spegne l\'HD se manca il Wi‑Fi Vespera né all\'avvio: solo l\'opzione del controllo mattutino (dopo sync e spegnimento telescopio) o «Spegni HD» a mano. Dopo un taglio USB può servire staccare e riattaccare il cavo.</string>
     <string name="system_hd_mount_none">Nessun HD salvato.</string>
     <string name="system_hd_mount_saved">HD salvato: %1$s.</string>
     <string name="system_clock_title">Sincronizzazione orologio NTP</string>
@@ -556,7 +556,7 @@
     <string name="system_sun_telescope_title">Spegni telescopio</string>
     <string name="system_sun_telescope_info">Invia lo spegnimento al Vespera.</string>
     <string name="system_sun_hd_title">Spegni HD</string>
-    <string name="system_sun_hd_info">Disabilitato in automatico: tagliare l’USB spesso impedisce di riaccendere l’HD senza staccare il cavo. Usa «Spegni HD» a mano solo se accetti di ripristinare il disco fisicamente.</string>
+    <string name="system_sun_hd_info">Solo nel controllo mattutino, dopo sync e spegnimento Vespera riusciti. Non si attiva se manca il Wi‑Fi. Dopo, per rimontare l’HD può servire staccare e riattaccare il cavo.</string>
     <string name="system_sun_next">Prossimo controllo: %1$s.</string>
     <string name="system_sun_due">Controllo in attesa (finestra aperta).</string>
     <string name="system_sun_unset">Serve una città (sezione Posizione, in alto) per calcolare l’alba.</string>

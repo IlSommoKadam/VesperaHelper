@@ -1337,11 +1337,19 @@ public final class PhotoSyncService extends Service {
                         ? R.string.telescope_command_shutdown_ok
                         : R.string.system_sun_result_shutdown_fail));
             }
-            // Do not unmount/power-off the HD after sync or telescope shutdown:
-            // cutting USB VBUS often requires physically unplugging the enclosure
-            // before Monta works again. Manual «Spegni HD» remains available.
+            // Morning check only: optional USB power-off after a successful
+            // telescope shutdown. Never on Wi‑Fi loss / boot / manual shutdown —
+            // cutting VBUS often needs a physical cable replug to remount.
             if (sunFlow && settings.sunHdShutdown()) {
-                Log.i(TAG, "sun-too-high: HD left powered (auto USB cut disabled)");
+                if (telescopeRequested && telescopeOk) {
+                    powerOffHdLocked(R.string.photo_hd_powered_off_shutdown);
+                    if (msg.length() > 0) msg.append('\n');
+                    msg.append(localized.getString(R.string.photo_hd_powered_off_shutdown));
+                } else if (telescopeRequested) {
+                    Log.i(TAG, "sun-too-high: HD left on after telescope shutdown fail");
+                } else {
+                    Log.i(TAG, "sun-too-high: HD shutdown skipped (telescope shutdown off)");
+                }
             }
             if (msg.length() > 0) {
                 message = msg.toString();
