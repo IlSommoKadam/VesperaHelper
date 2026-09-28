@@ -17,6 +17,7 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
 import java.util.Date;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -24,7 +25,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Read-only FTP server so the mounted HD can be pulled over Tailscale / LAN.
+ * FTP server for the mounted HD over Tailscale / LAN.
+ * Download and delete (files and directories) are allowed; upload stays blocked.
  * Listens on all interfaces (port {@link #PORT}); PASV advertises the control-socket local IP.
  */
 public final class SimpleFtpServer {
@@ -104,7 +106,7 @@ public final class SimpleFtpServer {
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             OutputStreamWriter writer = new OutputStreamWriter(
                     socket.getOutputStream(), StandardCharsets.UTF_8);
-            reply(writer, "220 VesperaHelper photo FTP (read-only)");
+            reply(writer, "220 VesperaHelper photo FTP");
             boolean authed = false;
             String line;
             while ((line = reader.readLine()) != null) {
@@ -212,7 +214,7 @@ public final class SimpleFtpServer {
                                 if ("LIST".equals(upper)) {
                                     String row = String.format(Locale.US,
                                             "%s 1 ftp ftp %d %s %s\r\n",
-                                            child.isDirectory() ? "drwxr-xr-x" : "-rw-r--r--",
+                                            child.isDirectory() ? "drwxrwxrwx" : "-rw-rw-rw-",
                                             child.isDirectory() ? 0 : child.length(),
                                             fmt.format(new Date(child.lastModified())),
                                             child.getName());
@@ -254,9 +256,40 @@ public final class SimpleFtpServer {
                     reply(writer, "226 Transfer complete");
                     continue;
                 }
-                if ("STOR".equals(upper) || "DELE".equals(upper) || "MKD".equals(upper)
-                        || "RMD".equals(upper) || "RNFR".equals(upper) || "APPE".equals(upper)) {
-                    reply(writer, "550 Read-only server");
+                if ("DELE".equals(upper)) {
+                    File file = resolve(cwd, unquote(arg));
+                    if (file == null || isRoot(file) || !file.isFile()) {
+                        reply(writer, "550 No such file");
+                        continue;
+                    }
+                    if (!deleteEntry(file)) {
+                        Log.w(TAG, "DELE failed " + file);
+                        reply(writer, "550 Delete failed");
+                        continue;
+                    }
+                    reply(writer, "250 Deleted");
+                    continue;
+                }
+                if ("RMD".equals(upper) || "XRMD".equals(upper)) {
+                    File dir = resolve(cwd, unquote(arg));
+                    if (dir == null || isRoot(dir) || !dir.isDirectory()) {
+                        reply(writer, "550 No such directory");
+                        continue;
+                    }
+                    if (sameOrInside(cwd, dir)) {
+                        File parent = dir.getParentFile();
+                        cwd = parent != null && insideRoot(parent) ? parent : root;
+                    }
+                    if (!deleteTree(dir)) {
+                        reply(writer, "550 Remove failed");
+                        continue;
+                    }
+                    reply(writer, "250 Directory removed");
+                    continue;
+                }
+                if ("STOR".equals(upper) || "MKD".equals(upper) || "XMKD".equals(upper)
+                        || "RNFR".equals(upper) || "APPE".equals(upper)) {
+                    reply(writer, "550 Upload not allowed");
                     continue;
                 }
                 if (!authed) {
@@ -289,6 +322,58 @@ public final class SimpleFtpServer {
         } catch (IOException ignored) {
             return null;
         }
+    }
+
+    private boolean isRoot(File file) {
+        return file.getAbsolutePath().equals(root.getAbsolutePath());
+    }
+
+    /** True when {@code cwd} is {@code dir} or a descendant, so rmdir would leave the session inside a gone folder. */
+    private static boolean sameOrInside(File cwd, File dir) {
+        String current = cwd.getAbsolutePath();
+        String base = dir.getAbsolutePath();
+        return current.equals(base) || current.startsWith(base + File.separator);
+    }
+
+    private static String unquote(String arg) {
+        if (arg == null) return "";
+        if (arg.length() >= 2 && arg.charAt(0) == '"' && arg.charAt(arg.length() - 1) == '"') {
+            return arg.substring(1, arg.length() - 1).replace("\"\"", "\"");
+        }
+        return arg;
+    }
+
+    private static boolean deleteEntry(File file) {
+        if (file.delete()) return true;
+        file.setWritable(true, false);
+        if (file.isDirectory()) file.setExecutable(true, false);
+        return file.delete();
+    }
+
+    /** Removes a directory and everything inside it. Never called on the FTP root. */
+    private boolean deleteTree(File dir) {
+        ArrayDeque<File> pending = new ArrayDeque<>();
+        ArrayDeque<File> post = new ArrayDeque<>();
+        pending.push(dir);
+        while (!pending.isEmpty()) {
+            File current = pending.pop();
+            post.push(current);
+            if (!current.isDirectory()) continue;
+            File[] children = current.listFiles();
+            if (children == null) {
+                Log.w(TAG, "list failed " + current);
+                return false;
+            }
+            for (File child : children) pending.push(child);
+        }
+        while (!post.isEmpty()) {
+            File current = post.pop();
+            if (!deleteEntry(current)) {
+                Log.w(TAG, "delete failed " + current);
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean insideRoot(File file) {

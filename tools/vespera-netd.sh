@@ -1211,18 +1211,10 @@ eth_restore_from_state() {
 }
 
 write_ack "vespera-netd started $(date)"
-# Do not remount at daemon start: Helper powers the HD off while Vespera is
-# offline and mounts again when the telescope comes online (or via Monta).
-power_off_hd_at_boot() {
-  # Always tear down leftover mounts + USB power, even without HD_STATE.
-  spec=""
-  if [ -f "$HD_STATE" ]; then
-    spec=$(grep '^UUID=' "$HD_STATE" | cut -d= -f2)
-    [ -z "$spec" ] || [ "$spec" = "-" ] && spec=$(grep '^DEV=' "$HD_STATE" | cut -d= -f2)
-  fi
-  eject_disk "$spec"
-}
-power_off_hd_at_boot
+# Leave the HD alone at daemon start. Cutting USB VBUS (eject/power-off)
+# often prevents remount until the cable is physically unplugged; Helper
+# mounts when Vespera is online (or via Attiva/Monta). Manual «Spegni HD»
+# still calls eject-disk when the user wants power saved.
 eth_restore_from_state
 
 handle_cmd() {

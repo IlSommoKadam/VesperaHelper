@@ -349,6 +349,29 @@ public final class PhotoSyncEngine {
         return countPhotos(user);
     }
 
+    /**
+     * Count photo files still on Vespera {@code /USER}. Returns {@code -1} if FTP
+     * is unreachable or listing fails.
+     */
+    static int countRemotePhotos(Network network) {
+        try (CommonsFtpClient ftp = new CommonsFtpClient(network, HOST)) {
+            int port = FtpProbe.findVesperaControl(network, HOST);
+            if (port <= 0) return -1;
+            ftp.connect(port);
+            String remoteRoot = ftp.resolveUserDir();
+            List<CommonsFtpClient.Entry> remote = ftp.listRecursive(remoteRoot);
+            int count = 0;
+            for (CommonsFtpClient.Entry entry : remote) {
+                if (entry != null && !entry.directory && isPhoto(entry.name)) count++;
+            }
+            Log.i(TAG, "remote USER photos remaining=" + count + " under " + remoteRoot);
+            return count;
+        } catch (Exception failure) {
+            Log.w(TAG, "count remote USER photos failed", failure);
+            return -1;
+        }
+    }
+
     static boolean hasIncomplete(File localRoot) {
         if (localRoot == null) return false;
         return hasPartFiles(localUserDir(localRoot));

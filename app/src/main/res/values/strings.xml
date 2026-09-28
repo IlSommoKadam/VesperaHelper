@@ -261,7 +261,7 @@
     <string name="telescope_confirm_init">Inizializzare il telescopio? Servono data/ora attuali e le coordinate dell’osservatorio (tab Sistema).</string>
     <string name="telescope_confirm_init_site">Inizializzare il telescopio con l’osservatorio «%1$s» (%2$s)?</string>
     <string name="telescope_shutdown_title">Spegni telescopio</string>
-    <string name="telescope_shutdown_message">Prima vengono copiate le foto USER sull\'HD, poi si spegne il Vespera e l\'hard disk. Il Wi‑Fi si chiuderà e Helper perderà la connessione.</string>
+    <string name="telescope_shutdown_message">Prima vengono copiate le foto USER sull\'HD, poi si spegne il Vespera. L\'hard disk resta alimentato (spegnerlo in automatico spesso richiede di staccare e riattaccare il cavo). Il Wi‑Fi si chiuderà e Helper perderà la connessione.</string>
     <string name="telescope_shutdown_syncing">Copia foto in corso, poi spegnimento…</string>
     <string name="status_tab_title">Stato Vespera</string>
     <string name="status_tab_infra">Infrastruttura</string>
@@ -404,7 +404,7 @@
     <string name="photo_ftp_vespera_on">Telescopio: porta %1$d  (Vespera %2$s:%3$d)</string>
     <string name="photo_ftp_vespera_off">Telescopio: nessuna porta FTP trovata su %1$s (cerco 21, 2121, 2221, 8021)</string>
     <string name="photo_ftp_vespera_wait">Telescopio: connetti il Vespera per cercare la porta FTP</string>
-    <string name="photo_ftp_hd_on">Hard disk: porta %1$d  (anonimo, sola lettura)</string>
+    <string name="photo_ftp_hd_on">Hard disk: porta %1$d  (anonimo, puoi cancellare)</string>
     <string name="photo_ftp_hd_off">Hard disk: FTP spento (si avvia quando l\'HD è montato)</string>
     <string name="photo_ftp_hint">Due porte FTP: telescopio (live) e hard disk.</string>
     <string name="photo_ftp_hint_two">Da remoto via Tailscale:\nTelescopio\n%1$s\nHard disk\n%2$s\n%3$s</string>
@@ -432,9 +432,9 @@
     <string name="photos_hd_mounted">MONTATO (%1$s)</string>
     <string name="photos_hd_waiting">In attesa del rimontaggio automatico dell\'HD salvato…</string>
     <string name="photos_ftp_off">@string/photo_ftp_off</string>
-    <string name="photos_ftp_on">FTP in ascolto sulla porta %1$d (anonymous, sola lettura)</string>
+    <string name="photos_ftp_on">FTP in ascolto sulla porta %1$d (anonymous, puoi cancellare)</string>
     <string name="photos_ftp_anonymous">utente anonymous (o ftp), senza password</string>
-    <string name="photos_ftp_hint">Connettiti da remoto (Tailscale) in sola lettura:\n%1$s</string>
+    <string name="photos_ftp_hint">Connettiti da remoto (Tailscale); puoi scaricare e cancellare:\n%1$s</string>
     <string name="photos_sync_idle">@string/photo_sync_idle</string>
     <string name="photos_sync_running">@string/photo_sync_running</string>
     <string name="photos_sync_need_hd">@string/photo_sync_need_hd</string>
@@ -523,7 +523,7 @@
     <string name="system_resume_sync_idle">Nessuna sync da riprendere.</string>
     <string name="system_hd_mount_title">Montaggio automatico HD</string>
     <string name="system_hd_power_off_title">Spegnimento HD</string>
-    <string name="system_hd_mount_info">Con Vespera online (API/FTP) monta l\'HD salvato. Lo spegne solo se il Wi‑Fi Vespera non c\'è (avvio app o perdita collegamento) e allo spegnimento telescopio, non mentre l\'API sta ancora partendo. Attiva/Monta/Spegni restano a mano.</string>
+    <string name="system_hd_mount_info">Con Vespera online (API/FTP) monta l\'HD salvato. Non spegne più l\'HD in automatico (tagliare l\'USB spesso richiede di staccare e riattaccare il cavo per rimontarlo). Attiva/Monta e Spegni HD restano a mano.</string>
     <string name="system_hd_mount_none">Nessun HD salvato.</string>
     <string name="system_hd_mount_saved">HD salvato: %1$s.</string>
     <string name="system_clock_title">Sincronizzazione orologio NTP</string>
@@ -556,7 +556,7 @@
     <string name="system_sun_telescope_title">Spegni telescopio</string>
     <string name="system_sun_telescope_info">Invia lo spegnimento al Vespera.</string>
     <string name="system_sun_hd_title">Spegni HD</string>
-    <string name="system_sun_hd_info">Smonta ed esclude l’alimentazione USB dell’hard disk.</string>
+    <string name="system_sun_hd_info">Disabilitato in automatico: tagliare l’USB spesso impedisce di riaccendere l’HD senza staccare il cavo. Usa «Spegni HD» a mano solo se accetti di ripristinare il disco fisicamente.</string>
     <string name="system_sun_next">Prossimo controllo: %1$s.</string>
     <string name="system_sun_due">Controllo in attesa (finestra aperta).</string>
     <string name="system_sun_unset">Serve una città (sezione Posizione, in alto) per calcolare l’alba.</string>

@@ -261,7 +261,7 @@
     <string name="telescope_confirm_init">Initialize the telescope? Current date/time and observatory coordinates (System tab) will be sent.</string>
     <string name="telescope_confirm_init_site">Initialize the telescope with observatory “%1$s” (%2$s)?</string>
     <string name="telescope_shutdown_title">Power off telescope</string>
-    <string name="telescope_shutdown_message">USER photos are copied to the HD first, then the Vespera and the hard disk power off. Wi‑Fi will drop and Helper will lose the connection.</string>
+    <string name="telescope_shutdown_message">USER photos are copied to the HD first, then the Vespera powers off. The hard disk stays powered (auto USB cut often needs a physical replug to remount). Wi‑Fi will drop and Helper will lose the connection.</string>
     <string name="telescope_shutdown_syncing">Copying photos, then powering off…</string>
     <string name="status_tab_title">Vespera status</string>
     <string name="status_tab_infra">Infrastructure</string>
@@ -404,7 +404,7 @@
     <string name="photo_ftp_vespera_on">Telescope: port %1$d  (Vespera %2$s:%3$d)</string>
     <string name="photo_ftp_vespera_off">Telescope: no FTP port found on %1$s (trying 21, 2121, 2221, 8021)</string>
     <string name="photo_ftp_vespera_wait">Telescope: connect Vespera to search the FTP port</string>
-    <string name="photo_ftp_hd_on">Hard disk: port %1$d  (anonymous, read-only)</string>
+    <string name="photo_ftp_hd_on">Hard disk: port %1$d  (anonymous, delete allowed)</string>
     <string name="photo_ftp_hd_off">Hard disk: FTP off (starts when the HD is mounted)</string>
     <string name="photo_ftp_hint">Two FTP ports: telescope (live) and hard disk.</string>
     <string name="photo_ftp_hint_two">Remotely via Tailscale:\nTelescope\n%1$s\nHard disk\n%2$s\n%3$s</string>
@@ -432,9 +432,9 @@
     <string name="photos_hd_mounted">MOUNTED (%1$s)</string>
     <string name="photos_hd_waiting">Waiting for saved HD auto-remount…</string>
     <string name="photos_ftp_off">@string/photo_ftp_off</string>
-    <string name="photos_ftp_on">FTP listening on port %1$d (anonymous, read-only)</string>
+    <string name="photos_ftp_on">FTP listening on port %1$d (anonymous, delete allowed)</string>
     <string name="photos_ftp_anonymous">user anonymous (or ftp), no password</string>
-    <string name="photos_ftp_hint">Connect remotely (Tailscale) read-only:\n%1$s</string>
+    <string name="photos_ftp_hint">Connect remotely (Tailscale); download and delete:\n%1$s</string>
     <string name="photos_sync_idle">@string/photo_sync_idle</string>
     <string name="photos_sync_running">@string/photo_sync_running</string>
     <string name="photos_sync_need_hd">@string/photo_sync_need_hd</string>
@@ -523,7 +523,7 @@
     <string name="system_resume_sync_idle">No sync to resume.</string>
     <string name="system_hd_mount_title">Automatic HD mount</string>
     <string name="system_hd_power_off_title">HD power off</string>
-    <string name="system_hd_mount_info">With Vespera online (API/FTP), mounts the saved HD. Powers it off only when Vespera Wi‑Fi is gone (app open or link loss) and when shutting down the telescope — not while the API is still starting. Activate/Mount/Power off remain manual.</string>
+    <string name="system_hd_mount_info">With Vespera online (API/FTP), mounts the saved HD. No longer powers the HD off automatically (cutting USB often requires unplugging the cable to remount). Activate/Mount and Power off HD remain manual.</string>
     <string name="system_hd_mount_none">No HD saved.</string>
     <string name="system_hd_mount_saved">Saved HD: %1$s.</string>
     <string name="system_clock_title">NTP clock sync</string>
@@ -556,7 +556,7 @@
     <string name="system_sun_telescope_title">Power off telescope</string>
     <string name="system_sun_telescope_info">Send shutdown to the Vespera.</string>
     <string name="system_sun_hd_title">Power off HD</string>
-    <string name="system_sun_hd_info">Unmount and cut USB power to the hard disk.</string>
+    <string name="system_sun_hd_info">Disabled automatically: cutting USB often prevents waking the HD without unplugging the cable. Use manual Power off HD only if you accept a physical replug.</string>
     <string name="system_sun_next">Next check: %1$s.</string>
     <string name="system_sun_due">Check pending (window is open).</string>
     <string name="system_sun_unset">Set a city (Location section, at the top) to compute sunrise.</string>

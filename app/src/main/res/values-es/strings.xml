@@ -261,7 +261,7 @@
     <string name="telescope_confirm_init">¿Inicializar el telescopio? Se enviarán fecha/hora actuales y las coordenadas del observatorio (pestaña Sistema).</string>
     <string name="telescope_confirm_init_site">¿Inicializar el telescopio con el observatorio «%1$s» (%2$s)?</string>
     <string name="telescope_shutdown_title">Apagar telescopio</string>
-    <string name="telescope_shutdown_message">Primero se copian las fotos USER al HD, luego se apagan el Vespera y el disco duro. El Wi‑Fi se cerrará y Helper perderá la conexión.</string>
+    <string name="telescope_shutdown_message">Primero se copian las fotos USER al HD, luego se apaga el Vespera. El disco duro sigue alimentado (cortar el USB en automático suele exigir desconectar el cable para remontarlo). El Wi‑Fi se cerrará y Helper perderá la conexión.</string>
     <string name="telescope_shutdown_syncing">Copiando fotos, luego apagado…</string>
     <string name="status_tab_title">Estado Vespera</string>
     <string name="status_tab_infra">Infraestructura</string>
@@ -404,7 +404,7 @@
     <string name="photo_ftp_vespera_on">Telescopio: puerto %1$d  (Vespera %2$s:%3$d)</string>
     <string name="photo_ftp_vespera_off">Telescopio: no hay puerto FTP en %1$s (pruebo 21, 2121, 2221, 8021)</string>
     <string name="photo_ftp_vespera_wait">Telescopio: conecta el Vespera para buscar el puerto FTP</string>
-    <string name="photo_ftp_hd_on">Disco duro: puerto %1$d  (anónimo, solo lectura)</string>
+    <string name="photo_ftp_hd_on">Disco duro: puerto %1$d  (anónimo, se puede borrar)</string>
     <string name="photo_ftp_hd_off">Disco duro: FTP apagado (arranca cuando el HD está montado)</string>
     <string name="photo_ftp_hint">Dos puertos FTP: telescopio (en vivo) y disco duro.</string>
     <string name="photo_ftp_hint_two">En remoto por Tailscale:\nTelescopio\n%1$s\nDisco duro\n%2$s\n%3$s</string>
@@ -432,9 +432,9 @@
     <string name="photos_hd_mounted">MONTADO (%1$s)</string>
     <string name="photos_hd_waiting">Esperando el remontaje automático del HD guardado…</string>
     <string name="photos_ftp_off">@string/photo_ftp_off</string>
-    <string name="photos_ftp_on">FTP en escucha en el puerto %1$d (anonymous, solo lectura)</string>
+    <string name="photos_ftp_on">FTP en escucha en el puerto %1$d (anonymous, se puede borrar)</string>
     <string name="photos_ftp_anonymous">usuario anonymous (o ftp), sin contraseña</string>
-    <string name="photos_ftp_hint">Conéctate en remoto (Tailscale) en solo lectura:\n%1$s</string>
+    <string name="photos_ftp_hint">Conéctate en remoto (Tailscale); descarga y borrado:\n%1$s</string>
     <string name="photos_sync_idle">@string/photo_sync_idle</string>
     <string name="photos_sync_running">@string/photo_sync_running</string>
     <string name="photos_sync_need_hd">@string/photo_sync_need_hd</string>
@@ -523,7 +523,7 @@
     <string name="system_resume_sync_idle">No hay sync que reanudar.</string>
     <string name="system_hd_mount_title">Montaje automático del HD</string>
     <string name="system_hd_power_off_title">Apagado del HD</string>
-    <string name="system_hd_mount_info">Con Vespera en línea (API/FTP) monta el HD guardado. Lo apaga solo si no hay Wi‑Fi de Vespera (al abrir la app o al perder el enlace) y al apagar el telescopio, no mientras la API aún arranca. Activar/Montar/Apagar siguen a mano.</string>
+    <string name="system_hd_mount_info">Con Vespera en línea (API/FTP) monta el HD guardado. Ya no apaga el HD automáticamente (cortar el USB suele exigir desconectar el cable para volver a montarlo). Activar/Montar y Apagar HD siguen a mano.</string>
     <string name="system_hd_mount_none">Ningún HD guardado.</string>
     <string name="system_hd_mount_saved">HD guardado: %1$s.</string>
     <string name="system_clock_title">Sincronización de reloj NTP</string>
@@ -556,7 +556,7 @@
     <string name="system_sun_telescope_title">Apagar telescopio</string>
     <string name="system_sun_telescope_info">Envía el apagado al Vespera.</string>
     <string name="system_sun_hd_title">Apagar HD</string>
-    <string name="system_sun_hd_info">Desmonta y corta la alimentación USB del disco duro.</string>
+    <string name="system_sun_hd_info">Desactivado en automático: cortar el USB suele impedir reactivar el HD sin desconectar el cable. Usa Apagar HD a mano solo si aceptas restaurarlo físicamente.</string>
     <string name="system_sun_next">Próxima comprobación: %1$s.</string>
     <string name="system_sun_due">Comprobación en espera (ventana abierta).</string>
     <string name="system_sun_unset">Elige una ciudad (sección Ubicación, arriba) para calcular el amanecer.</string>

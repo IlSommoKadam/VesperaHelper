@@ -9,6 +9,15 @@ log=/data/local/tmp/vespera-netd-autostart.log
 PIDFILE=/data/local/tmp/vespera-netd.pid
 echo "vespera-netd-autostart $(date) pid=$$" >> "$log"
 
+# Pi V3D compiles GLSL ES 3.10 only. This overlay is Singularity with Hypatie at 310.
+if [ -f /data/local/tmp/barnard-aligned.apk ]; then
+  base=$(pm path com.vaonis.barnard 2>/dev/null | sed -n 's/^package://p' | grep '/base.apk$' | head -n 1)
+  if [ -n "$base" ]; then
+    mount --bind /data/local/tmp/barnard-aligned.apk "$base" 2>>"$log" \
+      && echo "barnard-shader-bind $base $(date)" >> "$log"
+  fi
+fi
+
 chmod 755 /data/local/tmp/vespera-netd.sh 2>/dev/null
 
 chmod 755 /data/local/tmp/vespera-netd.sh 2>/dev/null

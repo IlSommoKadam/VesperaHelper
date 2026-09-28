@@ -89,6 +89,9 @@ L'app mantiene una richiesta Wi-Fi generica e chiede al daemon root `tools/vespe
 | 0.8.6 | 164 | Footer: bandiera nazione + pin città accanto al nome |
 | 0.8.7 | 165 | Footer meteo: HTTP chunked a byte (il °C di Open-Meteo spezzava il JSON) |
 | 0.8.8 | 166 | Footer: temperatura più grande e contrastata |
+| 0.8.9 | 167 | Niente spegnimento USB automatico dell’HD (riaccensione richiederebbe stacca/attacca) |
+| 0.8.10 | 168 | Prima dello spegnimento telescopio: sync completa e `/USER` vuoto (0 foto rimaste) |
+| 0.8.11 | 169 | Daemon: non spegne più l’HD all’avvio di vespera-netd |
 
 Il daemon deve essere avviato come root sul Pi dopo il boot; l'app comunica con esso tramite `net.req` / `disk.req` nella propria directory esterna. Comandi Ethernet su `net.req`: `eth-status`, `eth-dhcp`, `eth-static|ip|prefix|gw|dns1|dns2` (ack su `net.ack`).
 
