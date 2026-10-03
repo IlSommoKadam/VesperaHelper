@@ -193,6 +193,57 @@ final class VesperaStatusSnapshot {
         return motorCalibrated(motors, "AZ") && motorCalibrated(motors, "ALT");
     }
 
+    /**
+     * Parked/retracted arm: ALT near −90°. Open when ALT is clearly above that
+     * park stop. Empty when motors.ALT is missing.
+     */
+    static final double ARM_CLOSED_ALT_MAX = -80.0;
+
+    /** {@code CLOSED}, {@code OPEN}, {@code MOVING}, or empty if unknown. */
+    String armState() {
+        Double alt = altDegrees();
+        if (alt == null) return "";
+        if (armMoving()) return "MOVING";
+        return alt <= ARM_CLOSED_ALT_MAX ? "CLOSED" : "OPEN";
+    }
+
+    /** True when ALT is at the park/retracted stop. */
+    boolean isArmClosed() {
+        return "CLOSED".equals(armState());
+    }
+
+    private Double altDegrees() {
+        org.json.JSONObject body = statusBody();
+        org.json.JSONObject motors = body == null ? null : body.optJSONObject("motors");
+        if (motors == null) return null;
+        org.json.JSONObject alt = motors.optJSONObject("ALT");
+        if (alt == null) alt = motors.optJSONObject("alt");
+        if (alt == null) alt = motors.optJSONObject("altitude");
+        if (alt == null || !alt.has("position") || alt.isNull("position")) return null;
+        try {
+            return alt.getDouble("position");
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private boolean armMoving() {
+        org.json.JSONObject body = statusBody();
+        org.json.JSONObject motors = body == null ? null : body.optJSONObject("motors");
+        if (motors == null) return false;
+        // Arm fold/unfold is the ALT axis; AZ may slew while already open.
+        for (String key : new String[] {"ALT", "alt", "altitude"}) {
+            org.json.JSONObject axis = motors.optJSONObject(key);
+            if (axis == null) continue;
+            String state = axis.optString("state", "").toUpperCase(java.util.Locale.US);
+            if (state.contains("MOVING") || state.contains("RUNNING")
+                    || state.contains("BUSY") || state.contains("SLEW")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     String autoInitFailure(boolean includePrevious) {
         String fromCurrent = autoInitErrorName(currentAutoInitOp());
         if (!fromCurrent.isEmpty()) return fromCurrent;

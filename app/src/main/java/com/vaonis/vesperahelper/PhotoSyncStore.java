@@ -162,6 +162,16 @@ final class PhotoSyncStore {
     }
 
     /**
+     * Sunrise-based morning shutdown needs a wall clock that matched NTP.
+     * A reboot without RTC falls back to the Android build date; that must
+     * not look like "morning".
+     */
+    boolean clockTrustedForMorningShutdown() {
+        long now = System.currentTimeMillis();
+        return lastNtpOk() && !clockLooksWrong(now);
+    }
+
+    /**
      * True if an NTP attempt already ran recently. Uses {@link SystemClock#elapsedRealtime()}
      * so a wall-clock jump during set-clock cannot retrigger the sync.
      */

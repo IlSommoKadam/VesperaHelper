@@ -6,6 +6,7 @@ import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.RouteInfo;
 
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
@@ -61,17 +62,32 @@ final class InternetNetwork {
         boolean vpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
         boolean cell = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR);
         boolean wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
-        if (!internet && !ethernet) return -1;
-        if (!ethernet && !vpn && !cell && !wifi) return -1;
-        if (wifi && !internet) return -1;
+        boolean usb = caps.hasTransport(NetworkCapabilities.TRANSPORT_USB);
+        boolean route = hasDefaultRoute(cm, network);
+        // A Wi‑Fi that Android never marks INTERNET can still have a default
+        // route. Vespera (10.0.0.x) was already rejected above.
+        if (!internet && !ethernet && !route) return -1;
+        if (!ethernet && !vpn && !cell && !wifi && !usb) return -1;
+        if (wifi && !internet && !ethernet && !vpn && !cell && !route) return -1;
         int score = 0;
         if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) score += 8;
         if (internet) score += 4;
+        if (route) score += 2;
         if (ethernet) score += 6;
         else if (vpn) score += 4;
         else if (cell) score += 3;
+        else if (usb) score += 3;
         else if (wifi) score += 1;
         return score;
+    }
+
+    private static boolean hasDefaultRoute(ConnectivityManager cm, Network network) {
+        LinkProperties lp = cm.getLinkProperties(network);
+        if (lp == null) return false;
+        for (RouteInfo route : lp.getRoutes()) {
+            if (route.isDefaultRoute()) return true;
+        }
+        return false;
     }
 
     private static boolean isVesperaLink(ConnectivityManager cm, Network network) {

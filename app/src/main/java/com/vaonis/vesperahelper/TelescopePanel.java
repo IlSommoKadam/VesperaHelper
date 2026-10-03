@@ -436,6 +436,7 @@ final class TelescopePanel {
         addStatusRow(activity.getString(R.string.status_tab_field_step), snap.step);
         addStatusRow(activity.getString(R.string.status_tab_field_tracking),
                 trackingLabel(snap.tracking));
+        addStatusRow(activity.getString(R.string.status_tab_field_arm), armLabel(snap));
         addStatusRow(activity.getString(R.string.status_tab_field_motors), snap.motors);
         addStatusRow(activity.getString(R.string.status_tab_field_focus), snap.focus);
         if (!snap.targetName.isEmpty()) {
@@ -597,7 +598,7 @@ final class TelescopePanel {
     }
 
     private String observationLabel(VesperaStatusSnapshot snap) {
-        if ("RUNNING".equals(snap.observationStatus)) {
+        if ("RUNNING".equals(snap.observationStatus) || snap.isTrackingAcquisition()) {
             return activity.getString(R.string.status_tab_observation_running);
         }
         if ("FINISHED".equals(snap.observationStatus)) {
@@ -615,6 +616,20 @@ final class TelescopePanel {
             return activity.getString(R.string.status_tab_tracking_starting);
         }
         return activity.getString(R.string.status_tab_tracking_off);
+    }
+
+    private String armLabel(VesperaStatusSnapshot snap) {
+        String code = snap.armState();
+        if ("CLOSED".equals(code)) {
+            return activity.getString(R.string.status_tab_arm_closed);
+        }
+        if ("OPEN".equals(code)) {
+            return activity.getString(R.string.status_tab_arm_open);
+        }
+        if ("MOVING".equals(code)) {
+            return activity.getString(R.string.status_tab_arm_moving);
+        }
+        return "—";
     }
 
     private void addStatusRow(String label, String value) {

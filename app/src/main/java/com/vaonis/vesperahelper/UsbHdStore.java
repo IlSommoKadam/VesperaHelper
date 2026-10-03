@@ -12,6 +12,8 @@ public final class UsbHdStore {
     private static final String KEY_FSTYPE = "fstype";
     private static final String KEY_SIZE = "size";
     private static final String KEY_AUTO_MOUNT = "auto_mount";
+    /** USB VBUS cut (manual or morning). Stays off until Attiva HD. */
+    private static final String KEY_POWERED_OFF = "powered_off";
 
     private final SharedPreferences prefs;
 
@@ -30,6 +32,15 @@ public final class UsbHdStore {
 
     public boolean isAutoMount() {
         return prefs.getBoolean(KEY_AUTO_MOUNT, false) && isConfigured();
+    }
+
+    /** True after a real USB power-off. Survives a service restart so boot does not wake the disk. */
+    public boolean isPoweredOff() {
+        return prefs.getBoolean(KEY_POWERED_OFF, false);
+    }
+
+    public void setPoweredOff(boolean poweredOff) {
+        prefs.edit().putBoolean(KEY_POWERED_OFF, poweredOff).apply();
     }
 
     public String getName() { return prefs.getString(KEY_NAME, ""); }

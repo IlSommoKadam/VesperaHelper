@@ -67,10 +67,8 @@ final class TelegramNotifier implements TelescopeStatusHub.Listener {
 
     private void sendOrQueue(String text) {
         if (!settings.configured()) return;
-        if (!InternetNetwork.available(app)) {
-            queue(text);
-            return;
-        }
+        // Try even when Android lists no uplink: eth0/Tailscale may still be the
+        // default route. HostDns uses that socket first (same path as meteo).
         TelegramBotClient.Result result = TelegramBotClient.sendMessage(
                 app, settings.token(), settings.chatId(), text);
         if (result.ok) {
@@ -90,7 +88,6 @@ final class TelegramNotifier implements TelescopeStatusHub.Listener {
 
     private void drainQueue() {
         if (!settings.configured()) return;
-        if (!InternetNetwork.available(app)) return;
         while (!pending.isEmpty()) {
             String text = pending.peekFirst();
             TelegramBotClient.Result result = TelegramBotClient.sendMessage(

@@ -120,14 +120,8 @@ final class PhotoPanel {
                         .setAction(PhotoSyncService.ACTION_UNMOUNT)));
         unmount.setVisibility(View.GONE);
         eject = action(activity.getString(R.string.photo_btn_eject), UiStyle.TERRACOTTA);
-        eject.setOnClickListener(v -> {
-            String spec = selectedId;
-            if (spec == null || spec.isEmpty()) spec = hdStore.getSpec();
-            if (spec == null || spec.isEmpty()) spec = diskStore.getId();
-            activity.startForegroundService(new Intent(activity, PhotoSyncService.class)
-                    .setAction(PhotoSyncService.ACTION_EJECT)
-                    .putExtra(PhotoSyncService.EXTRA_DISK_ID, spec));
-        });
+        // USB power-off stays off the photo screen: only the System checkbox remains.
+        eject.setVisibility(View.GONE);
         ejectSafe = body(activity.getString(R.string.photo_hd_safe_to_remove));
         ejectSafe.setTypeface(ejectSafe.getTypeface(), android.graphics.Typeface.BOLD);
         ejectSafe.setTextColor(COLOR_CONNECTED);
@@ -498,7 +492,7 @@ final class PhotoPanel {
         boolean hasSelection = selectedId != null && !selectedId.isEmpty();
         boolean hasSaved = hdStore.isConfigured() || !diskStore.getId().isEmpty();
         boolean hasListed = listedCount > 0;
-        // Smonta HD is hidden: Spegni HD already umounts then powers USB off.
+        // Smonta and Spegni HD stay hidden. USB power-off cannot be undone from the Pi.
         unmount.setVisibility(View.GONE);
         if (mounted) {
             mount.setVisibility(View.GONE);
@@ -512,18 +506,8 @@ final class PhotoPanel {
             mount.setEnabled(canMount);
             UiStyle.applyRaised(mount, canMount ? COLOR_CONNECTED : COLOR_OFFLINE, canMount);
         }
-        // When the HD is powered off, hide Spegni and show the hint + Attiva.
-        boolean showSafe = ejected;
-        eject.setVisibility(showSafe ? View.GONE : View.VISIBLE);
-        ejectSafe.setVisibility(showSafe ? View.VISIBLE : View.GONE);
-        if (showSafe) {
-            ejectSafe.setText(activity.getString(R.string.photo_hd_powered_off_hint));
-        }
-        if (!showSafe) {
-            boolean canEject = mounted || hasListed || hasSaved;
-            eject.setEnabled(canEject);
-            UiStyle.applyRaised(eject, canEject ? UiStyle.TERRACOTTA : COLOR_OFFLINE, canEject);
-        }
+        eject.setVisibility(View.GONE);
+        ejectSafe.setVisibility(View.GONE);
     }
 
     private void refreshOverlayRow() {

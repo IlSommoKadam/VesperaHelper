@@ -605,6 +605,17 @@ usb_port_record() {
   echo "$port" >> "$HD_USB_PORTS"
 }
 
+# Write sysfs only when the value differs. Returns 0 if it changed.
+sysfs_set() {
+  file="$1"
+  want="$2"
+  [ -f "$file" ] || return 1
+  cur=$(cat "$file" 2>/dev/null | tr -d ' \t\r\n')
+  [ "$cur" = "$want" ] && return 1
+  echo "$want" > "$file" 2>/dev/null || return 1
+  return 0
+}
+
 usb_port_disable() {
   port="$1"
   [ -n "$port" ] && [ -f "$port/disable" ] || return 1
@@ -614,11 +625,82 @@ usb_port_disable() {
   echo "usb-port-disable $port $(date)" >&2
 }
 
+# Re-apply VBUS. A previous cut leaves pm_qos_no_power_off=0, so the hub
+# suspends the port and the disk stays off even when disable is already 0.
 usb_port_enable() {
   port="$1"
   [ -n "$port" ] && [ -f "$port/disable" ] || return 1
-  echo 0 > "$port/disable"
-  echo "usb-port-enable $port $(date)" >&2
+  changed=0
+  sysfs_set "$port/power/pm_qos_no_power_off" 1 && changed=1
+  sysfs_set "$port/power/autosuspend_delay_ms" -1 && changed=1
+  sysfs_set "$port/power/control" on && changed=1
+  dis=$(cat "$port/disable" 2>/dev/null | tr -d ' \t\r\n')
+  if [ "$dis" != "0" ]; then
+    echo 0 > "$port/disable" 2>/dev/null
+    changed=1
+  fi
+  if [ "$changed" -eq 1 ]; then
+    echo "usb-port-enable $port $(date)" >&2
+  fi
+}
+
+# One VBUS cycle on ports we previously cut, so an enclosure can enumerate again.
+usb_pulse_saved_ports() {
+  [ -f "$HD_USB_PORTS" ] || return 0
+  while IFS= read -r port; do
+    [ -n "$port" ] && [ -f "$port/disable" ] || continue
+    echo 1 > "$port/power/pm_qos_no_power_off" 2>/dev/null
+    echo on > "$port/power/control" 2>/dev/null
+    echo 1 > "$port/disable" 2>/dev/null
+    twin=$(usb_twin_port "$port")
+    if [ -n "$twin" ] && [ -f "$twin/disable" ]; then
+      echo 1 > "$twin/power/pm_qos_no_power_off" 2>/dev/null
+      echo on > "$twin/power/control" 2>/dev/null
+      echo 1 > "$twin/disable" 2>/dev/null
+    fi
+  done < "$HD_USB_PORTS"
+  sleep 1
+  while IFS= read -r port; do
+    [ -n "$port" ] || continue
+    usb_port_enable "$port"
+    twin=$(usb_twin_port "$port")
+    [ -n "$twin" ] && usb_port_enable "$twin"
+  done < "$HD_USB_PORTS"
+}
+
+# Stop USB autosuspend from dropping the HD. Safe to call often.
+usb_keep_awake() {
+  if [ -f /sys/module/usbcore/parameters/autosuspend ]; then
+    sysfs_set /sys/module/usbcore/parameters/autosuspend -1 \
+      && echo "usb-keep-awake autosuspend=-1 $(date)" >&2
+  fi
+  if [ -f "$HD_USB_PORTS" ]; then
+    while IFS= read -r port; do
+      [ -n "$port" ] || continue
+      usb_port_enable "$port"
+      twin=$(usb_twin_port "$port")
+      [ -n "$twin" ] && usb_port_enable "$twin"
+    done < "$HD_USB_PORTS"
+  fi
+  for d in /sys/bus/usb/devices/*; do
+    [ -e "$d" ] || continue
+    sysfs_set "$d/power/control" on >/dev/null
+    sysfs_set "$d/power/autosuspend_delay_ms" -1 >/dev/null
+  done
+  for d in $(usb_storage_dirs); do
+    [ -n "$d" ] || continue
+    sysfs_set "$d/power/control" on \
+      && echo "usb-keep-awake storage $d $(date)" >&2
+    p=$(usb_hub_port "$d")
+    [ -n "$p" ] && usb_port_enable "$p"
+    twin=$(usb_twin_port "$p")
+    [ -n "$twin" ] && usb_port_enable "$twin"
+  done
+  for sys in /sys/block/sd*; do
+    [ -e "$sys/device/power/control" ] || continue
+    sysfs_set "$sys/device/power/control" on \
+      && echo "usb-keep-awake scsi $(basename "$sys") $(date)" >&2
+  done
 }
 
 # USB mass-storage device dirs still enumerated (even with authorized=0).
@@ -849,67 +931,9 @@ umount_disk() {
 }
 
 eject_disk() {
-  spec="$1"
-  bind=$(photos_dir)
-  state_mnt=""
-  dev=""
-  if [ -f "$HD_STATE" ]; then
-    state_bind=$(grep '^BIND=' "$HD_STATE" | cut -d= -f2)
-    state_mnt=$(grep '^MOUNT=' "$HD_STATE" | cut -d= -f2)
-    dev=$(grep '^DEV=' "$HD_STATE" | cut -d= -f2)
-    [ -n "$state_bind" ] && bind="$state_bind"
-  fi
-  if [ -z "$dev" ] && [ -n "$spec" ]; then
-    dev=$(resolve_block_dev "$spec")
-  fi
-  if [ -z "$dev" ]; then
-    dev=$(mounted_hd_dev)
-  fi
-  # Remember USB path before we tear the block device down.
-  if [ -n "$dev" ]; then
-    save_hd_usb "$(usb_parent_of_block "$dev")"
-  elif [ -f "$HD_USB_STATE" ]; then
-    :
-  fi
-
-  # 1) Always flush mounts first (NTFS fuse ghosts keep the disk "on" in the UI).
-  flush_hd_mounts
-  [ -n "$dev" ] && umount_all_of "$dev"
-  [ -n "$state_mnt" ] && { umount "$state_mnt" 2>/dev/null || umount -l "$state_mnt" 2>/dev/null; }
-  sync
-
-  # 2) SCSI delete if the block node is still visible.
-  if [ -n "$dev" ]; then
-    eject_dev "$dev"
-    parent=$(scsi_parent "$dev")
-    still=$(ls -d /sys/block/"$parent" 2>/dev/null)
-    if [ -n "$still" ]; then
-      flush_hd_mounts
-      umount_all_of "$dev"
-      sync
-      eject_dev "$dev"
-      still=$(ls -d /sys/block/"$parent" 2>/dev/null)
-    fi
-  else
-    still=""
-  fi
-
-  # 3) Cut USB authorization so the enclosure can spin down.
-  usb_power_off "$dev"
-  clear_hd_state
-
-  if path_mounted "$bind" || path_mounted "$HD_MOUNT"; then
-    write_mount_ack "eject-busy ${dev:-?}"
-    write_ack "eject-busy ${dev:-?} mounts-remain"
-    return 1
-  fi
-  if [ -n "$still" ]; then
-    write_mount_ack "eject-busy $dev"
-    write_ack "eject-busy $dev"
-    return 1
-  fi
-  write_mount_ack "ejected|${dev:-usb}"
-  write_ack "eject-ok ${dev:-usb} $(date)"
+  # Leave the enclosure powered and mounted. Cutting VBUS needs a cable replug.
+  echo "eject-disk ignored (USB stays powered) spec=${1:-} $(date)" >&2
+  disk_status
 }
 
 disk_status() {
@@ -1004,9 +1028,52 @@ eth_read_ip_prefix() {
 
 eth_read_gateway() {
   # Android ConnectivityService keeps the uplink in table "eth0".
-  gw=$(ip -4 route show table eth0 2>/dev/null | awk '/default/ { for (i=1;i<=NF;i++) if ($i=="via") { print $(i+1); exit } }')
-  [ -n "$gw" ] && echo "$gw" && return
-  ip -4 route show default 2>/dev/null | awk '/default/ { for (i=1;i<=NF;i++) if ($i=="via") { print $(i+1); exit } }'
+  # Ignore a default that points at the Vespera AP (10.0.0.1 via wlan0).
+  gw=$(ip -4 route show table eth0 2>/dev/null | awk '/default/ && $0 !~ /wlan0/ {
+    for (i=1;i<=NF;i++) if ($i=="via") { print $(i+1); exit }
+  }')
+  case "$gw" in
+    10.0.0.*) gw="" ;;
+  esac
+  if [ -n "$gw" ]; then
+    echo "$gw"
+    return
+  fi
+  ip -4 route show default dev "$ETH_IFACE" 2>/dev/null | awk '/default/ {
+    for (i=1;i<=NF;i++) if ($i=="via") { print $(i+1); exit }
+  }'
+}
+
+# Priority 94 sends 10.0.0.0/24 to wlan0. Priority 96 sends everything else
+# through eth0, before Android's per-app rule that would use the Vespera Wi‑Fi.
+eth_steer_uplink() {
+  cidr=$(eth_read_ip_prefix)
+  gw=$(eth_read_gateway)
+  case "$gw" in
+    ''|-) gw="" ;;
+  esac
+  if [ -z "$gw" ] && [ -f "$ETH_STATE" ]; then
+    gw=$(grep '^GW=' "$ETH_STATE" 2>/dev/null | cut -d= -f2)
+    case "$gw" in
+      ''|-) gw="" ;;
+    esac
+  fi
+  if [ -z "$cidr" ] || [ -z "$gw" ]; then
+    ip rule del priority 96 2>/dev/null
+    return 0
+  fi
+  ip route replace default via "$gw" dev "$ETH_IFACE" table eth0 2>/dev/null \
+    || ip route add default via "$gw" dev "$ETH_IFACE" table eth0 2>/dev/null
+  ip route replace default via "$gw" dev "$ETH_IFACE" 2>/dev/null \
+    || ip route add default via "$gw" dev "$ETH_IFACE" 2>/dev/null
+  if ! ip route show table eth0 2>/dev/null | grep -q '^default'; then
+    ip rule del priority 96 2>/dev/null
+    return 0
+  fi
+  if ! ip rule show priority 96 2>/dev/null | grep -q 'eth0'; then
+    ip rule del priority 96 2>/dev/null
+    ip rule add lookup eth0 priority 96 2>/dev/null
+  fi
 }
 
 eth_has_default_route() {
@@ -1211,11 +1278,18 @@ eth_restore_from_state() {
 }
 
 write_ack "vespera-netd started $(date)"
-# Leave the HD alone at daemon start. Cutting USB VBUS (eject/power-off)
-# often prevents remount until the cable is physically unplugged; Helper
-# mounts when Vespera is online (or via Attiva/Monta). Manual «Spegni HD»
-# still calls eject-disk when the user wants power saved.
+# Keep the HD USB port powered. Do not cut VBUS: the enclosure often stays
+# dead until the cable is replugged.
+usb_keep_awake
+if [ -z "$(usb_storage_dirs)" ]; then
+  echo "usb-keep-awake no storage, pulse saved ports $(date)" >&2
+  usb_pulse_saved_ports
+  sleep 4
+  usb_keep_awake
+fi
+auto_mount_from_state || true
 eth_restore_from_state
+eth_steer_uplink
 
 handle_cmd() {
   line="$1"
@@ -1394,6 +1468,8 @@ on_term() {
 trap on_term TERM INT
 
 WATCH=0
+USB_WATCH=0
+ETH_WATCH=0
 while true; do
   handled=0
   # Disk ops have their own file so route/promote/check-singularity cannot steal them.
@@ -1407,6 +1483,16 @@ while true; do
   if [ "$WATCH" -ge 8 ]; then
     WATCH=0
     ensure_helper_services
+  fi
+  USB_WATCH=$((USB_WATCH + 1))
+  if [ "$USB_WATCH" -ge 30 ]; then
+    USB_WATCH=0
+    usb_keep_awake
+  fi
+  ETH_WATCH=$((ETH_WATCH + 1))
+  if [ "$ETH_WATCH" -ge 5 ]; then
+    ETH_WATCH=0
+    eth_steer_uplink
   fi
   [ "$handled" -eq 0 ] && sleep 1
 done

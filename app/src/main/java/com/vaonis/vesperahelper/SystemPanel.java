@@ -449,7 +449,9 @@ final class SystemPanel {
         boolean retryToday = SystemSettingsStore.sunTooHighNeedsRetry(settings.sunTooHighResult());
         long nextAt = syncStore.nextSunTooHighCheckAt(settings.sunTooHighDay(), retryToday, now);
         String next;
-        if (nextAt <= 0) {
+        if (!syncStore.clockTrustedForMorningShutdown()) {
+            next = activity.getString(R.string.system_sun_wait_ntp);
+        } else if (nextAt <= 0) {
             next = activity.getString(R.string.system_sun_unset);
         } else if (nextAt <= now + 5_000L) {
             next = activity.getString(R.string.system_sun_due);
@@ -489,6 +491,9 @@ final class SystemPanel {
         }
         if (SystemSettingsStore.SUN_RESULT_NOT_STATUS.equals(code)) {
             return activity.getString(R.string.system_sun_result_not_status);
+        }
+        if (SystemActivityLog.DETAIL_NO_NTP.equals(code)) {
+            return activity.getString(R.string.system_sun_result_no_ntp);
         }
         if (code != null && code.startsWith("step")) {
             int sp = code.indexOf(' ');

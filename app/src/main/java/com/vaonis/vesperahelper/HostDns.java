@@ -54,15 +54,20 @@ final class HostDns {
         if (isIpLiteral(host)) return InetAddress.getByName(host);
         Network network = InternetNetwork.find(context);
         Exception primary = null;
-        try {
-            if (network != null) {
+        if (network != null) {
+            try {
                 InetAddress ipv4 = firstIpv4(network.getAllByName(host));
                 if (ipv4 != null) return ipv4;
+            } catch (Exception failure) {
+                primary = failure;
+                Log.w(TAG, "network DNS failed for " + host + ": " + failure.getMessage());
             }
+        }
+        try {
             InetAddress ipv4 = firstIpv4(InetAddress.getAllByName(host));
             if (ipv4 != null) return ipv4;
         } catch (Exception failure) {
-            primary = failure;
+            if (primary == null) primary = failure;
             Log.w(TAG, "system DNS failed for " + host + ": " + failure.getMessage());
         }
         InetAddress viaDoh = resolveDoh(context, network, host);
@@ -77,24 +82,36 @@ final class HostDns {
 
     /** HTTPS GET with SNI = host, TCP to resolved IP (works when LAN DNS is broken). */
     static HttpResult httpsGet(Context context, String host, String pathAndQuery) throws Exception {
+        return https(context, host, "GET", pathAndQuery, null, null, "application/json");
+    }
+
+    /** HTTPS POST JSON. Same unbound-then-bound sockets as {@link #httpsGet}. */
+    static HttpResult httpsPost(Context context, String host, String path, byte[] body)
+            throws Exception {
+        return https(context, host, "POST", path, body, "application/json; charset=UTF-8",
+                "application/json");
+    }
+
+    private static HttpResult https(Context context, String host, String method, String path,
+            byte[] body, String contentType, String accept) throws Exception {
         InetAddress address = resolve(context, host);
         Network network = InternetNetwork.find(context);
         Exception last = null;
-        // Prefer unbound socket first: on some Pi builds Network sockets hang on TLS
-        // to certain hosts even when ping works.
+        // Ethernet/VPN first. An unbound socket follows Android's default network,
+        // which on the Pi is the Vespera Wi‑Fi (no route to the Internet).
         Network[] attempts = network == null
                 ? new Network[] { null }
-                : new Network[] { null, network };
+                : new Network[] { network, null };
         for (Network net : attempts) {
             try {
-                HttpResult result = httpsGetOn(net, host, address, pathAndQuery, "application/json");
-                Log.i(TAG, host + " HTTP " + result.code
+                HttpResult result = httpsOn(net, host, address, method, path, body, contentType, accept);
+                Log.i(TAG, host + " " + method + " HTTP " + result.code
                         + " via " + (net == null ? "default" : "network")
                         + " body=" + result.body.length());
                 return result;
             } catch (Exception failure) {
                 last = failure;
-                Log.w(TAG, host + " https via "
+                Log.w(TAG, host + " " + method + " via "
                         + (net == null ? "default" : "network")
                         + " failed: " + failure.getMessage());
             }
@@ -104,6 +121,12 @@ final class HostDns {
 
     private static HttpResult httpsGetOn(Network network, String host, InetAddress address,
             String pathAndQuery, String accept) throws Exception {
+        return httpsOn(network, host, address, "GET", pathAndQuery, null, null, accept);
+    }
+
+    private static HttpResult httpsOn(Network network, String host, InetAddress address,
+            String method, String pathAndQuery, byte[] body, String contentType, String accept)
+            throws Exception {
         Socket plain = null;
         SSLSocket ssl = null;
         long t0 = System.currentTimeMillis();
@@ -133,15 +156,20 @@ final class HostDns {
 
             String path = pathAndQuery == null || pathAndQuery.isEmpty() ? "/" : pathAndQuery;
             if (path.charAt(0) != '/') path = "/" + path;
-            String request = "GET " + path + " HTTP/1.1\r\n"
-                    + "Host: " + host + "\r\n"
-                    + "User-Agent: VesperaHelper\r\n"
-                    + "Accept: " + accept + "\r\n"
-                    + "Accept-Encoding: identity\r\n"
-                    + "Connection: close\r\n"
-                    + "\r\n";
+            StringBuilder request = new StringBuilder();
+            request.append(method).append(' ').append(path).append(" HTTP/1.1\r\n");
+            request.append("Host: ").append(host).append("\r\n");
+            request.append("User-Agent: VesperaHelper\r\n");
+            request.append("Accept: ").append(accept).append("\r\n");
+            request.append("Accept-Encoding: identity\r\n");
+            if (body != null) {
+                request.append("Content-Type: ").append(contentType).append("\r\n");
+                request.append("Content-Length: ").append(body.length).append("\r\n");
+            }
+            request.append("Connection: close\r\n\r\n");
             OutputStream out = ssl.getOutputStream();
-            out.write(request.getBytes(StandardCharsets.US_ASCII));
+            out.write(request.toString().getBytes(StandardCharsets.US_ASCII));
+            if (body != null && body.length > 0) out.write(body);
             out.flush();
 
             byte[] raw = readAllBytes(ssl.getInputStream());

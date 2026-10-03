@@ -22,6 +22,8 @@ final class SystemSettingsStore {
     private static final String KEY_SUN_SYNC = "sun_sync";
     private static final String KEY_SUN_TELESCOPE = "sun_telescope_shutdown";
     private static final String KEY_SUN_HD = "sun_hd_shutdown";
+    /** Set on the next settings save so a pre-checked inherited value is not treated as opt-in. */
+    private static final String KEY_SUN_HD_CHOICE = "sun_hd_shutdown_choice";
     private static final String KEY_SUN_PI_SHUTDOWN = "sun_pi_shutdown";
     private static final String KEY_SUN_TOO_HIGH_DAY = "sun_too_high_day";
     private static final String KEY_SUN_TOO_HIGH_AT = "sun_too_high_at";
@@ -109,6 +111,7 @@ final class SystemSettingsStore {
                 .putBoolean(KEY_SUN_SYNC, snap.sunSync)
                 .putBoolean(KEY_SUN_TELESCOPE, snap.sunTelescopeShutdown)
                 .putBoolean(KEY_SUN_HD, snap.sunHdShutdown)
+                .putBoolean(KEY_SUN_HD_CHOICE, true)
                 .putBoolean(KEY_SUN_PI_SHUTDOWN, snap.sunPiShutdown)
                 .commit();
     }
@@ -138,9 +141,13 @@ final class SystemSettingsStore {
         return prefs.getBoolean(KEY_SUN_TELESCOPE, true);
     }
 
+    /**
+     * Off unless the user saved the checkbox after this opt-in.
+     * Older builds inherited {@link #sunCheck()}, so a stored {@code true} was often never chosen.
+     */
     boolean sunHdShutdown() {
-        if (!prefs.contains(KEY_SUN_HD)) return sunCheck();
-        return prefs.getBoolean(KEY_SUN_HD, true);
+        if (!prefs.getBoolean(KEY_SUN_HD_CHOICE, false)) return false;
+        return prefs.getBoolean(KEY_SUN_HD, false);
     }
 
     boolean sunPiShutdown() { return prefs.getBoolean(KEY_SUN_PI_SHUTDOWN, false); }

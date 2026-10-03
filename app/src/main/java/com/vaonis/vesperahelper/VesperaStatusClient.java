@@ -120,7 +120,7 @@ final class VesperaStatusClient {
         VesperaLastTarget.rememberFromStatus(body);
         VesperaLastTarget.rememberFromStatus(root);
         String operationType = lastObservation != null ? text(lastObservation, "type") : "";
-        String observationStatus = observationStatusOf(operation, lastObservation);
+        String observationStatus = observationStatusOf(body, root, operation, lastObservation);
         String targetName = "";
         int stacking = -1;
         long exposureUs = 0;
@@ -320,47 +320,92 @@ final class VesperaStatusClient {
         return op.optJSONObject("target") != null && op.optJSONObject("capture") != null;
     }
 
-    private static String observationStatusOf(JSONObject current, JSONObject last) {
-        if (isActiveObservation(current)) return "RUNNING";
+    private static String observationStatusOf(JSONObject body, JSONObject root,
+            JSONObject current, JSONObject last) {
+        if (isActiveObservation(current) || captureOpen(current)) return "RUNNING";
+        boolean currentIsObservation = looksLikeObservation(current);
+        if (!currentIsObservation
+                && (isActiveObservation(last) || captureOpen(last))) {
+            return "RUNNING";
+        }
+        if (motorsAreTracking(body, root) && liveWork(current, last)) return "RUNNING";
         String stopped = stoppedLabel(current);
-        if (stopped.isEmpty()) stopped = stoppedLabel(last);
+        // A finished previous night must not cover the operation in progress.
+        if (stopped.isEmpty() && !currentIsObservation) stopped = stoppedLabel(last);
         if (!stopped.isEmpty()) return stopped;
         if (looksLikeObservation(last) && current == null) return "STOPPED";
         return "";
     }
 
+    /** Capture still taking frames, even if the parent operation looks closed. */
+    private static boolean captureOpen(JSONObject op) {
+        if (!looksLikeObservation(op)) return false;
+        JSONObject capture = op.optJSONObject("capture");
+        if (capture == null || capture.optBoolean("stopped", false)) return false;
+        return capture.has("startTime") || capture.optInt("acquisitionCount", 0) > 0
+                || capture.optInt("stackingCount", 0) > 0
+                || !op.optBoolean("stopped", false);
+    }
+
+    private static boolean liveWork(JSONObject current, JSONObject last) {
+        if (captureOpen(current) || captureOpen(last)) return true;
+        if (isActiveObservation(current) || isActiveObservation(last)) return true;
+        if (current == null || current.optBoolean("stopped", false)) return false;
+        String type = text(current, "type").toUpperCase(java.util.Locale.US);
+        return type.contains("OBSERV") || type.contains("CAPTURE") || type.contains("MOSAIC")
+                || type.contains("FOCUS") || type.contains("POINT") || type.contains("TRACK")
+                || type.contains("GOTO") || type.contains("SLEW");
+    }
+
+    private static boolean motorsAreTracking(JSONObject body, JSONObject root) {
+        return "ON".equals(trackingFromMotors(body, root));
+    }
+
     private static boolean isActiveObservation(JSONObject op) {
         if (!looksLikeObservation(op)) return false;
-        if (hasEnded(op)) return false;
-        String store = storeState(op);
-        if (store.contains("NON_RESUMABLE")) return false;
+        // Firmware keeps store.state at NON_RESUMABLE for the whole standard
+        // session, and often writes endTime while pointing or stacking.
+        // The session is live until the operation itself is stopped.
+        if (op.optBoolean("stopped", false)) return false;
         String status = operationPhase(op).toUpperCase(java.util.Locale.US);
-        if (!status.isEmpty() && isStoppedPhase(status)) return false;
-        return true;
+        return status.isEmpty() || !isStoppedPhase(status);
     }
 
     private static boolean hasEnded(JSONObject op) {
-        if (op == null) return false;
+        if (!looksLikeObservation(op)) return false;
+        if (isActiveObservation(op)) return false;
         if (op.optBoolean("stopped", false)) return true;
-        return op.has("endTime") && !op.isNull("endTime");
+        return isStoppedPhase(operationPhase(op));
     }
 
     private static String stoppedLabel(JSONObject op) {
-        if (!looksLikeObservation(op)) return "";
+        if (!looksLikeObservation(op) || !hasEnded(op)) return "";
+        if (isResumable(op) || hasOperationError(op)) return "STOPPED";
         String store = storeState(op);
-        if (!hasEnded(op)) {
-            if (store.contains("NON_RESUMABLE")) return "FINISHED";
-            return "";
-        }
-        if (isResumable(op)) return "STOPPED";
-        if (store.contains("NON_RESUMABLE") || store.contains("FINISH")) return "FINISHED";
-        String phase = operationPhase(op);
-        if (isStoppedPhase(phase)) {
-            String upper = phase.toUpperCase(java.util.Locale.US);
-            if (upper.contains("FINISH")) return "FINISHED";
-            return "STOPPED";
+        String phase = operationPhase(op).toUpperCase(java.util.Locale.US);
+        if (store.contains("FINISH") || phase.contains("FINISH")) return "FINISHED";
+        // Closed standard session, no error: the night actually completed.
+        if (op.optBoolean("stopped", false) && store.contains("NON_RESUMABLE")) {
+            return "FINISHED";
         }
         return "STOPPED";
+    }
+
+    private static boolean hasOperationError(JSONObject op) {
+        if (op == null) return false;
+        if (errorName(op).length() > 0) return true;
+        JSONObject capture = op.optJSONObject("capture");
+        return capture != null && errorName(capture).length() > 0;
+    }
+
+    private static String errorName(JSONObject op) {
+        if (op == null) return "";
+        JSONObject error = op.optJSONObject("error");
+        if (error != null) {
+            String name = text(error, "name");
+            if (!name.isEmpty()) return name;
+        }
+        return text(op, "error");
     }
 
     private static String operationPhase(JSONObject op) {
@@ -373,8 +418,15 @@ final class VesperaStatusClient {
 
     private static boolean isStoppedPhase(String phase) {
         String u = phase == null ? "" : phase.toUpperCase(java.util.Locale.US);
-        return u.contains("STOP") || u.contains("FINISH") || u.contains("ABORT")
-                || u.contains("CANCEL") || u.contains("IDLE") || u.contains("END");
+        if (u.isEmpty()) return false;
+        if (u.contains("STOP") || u.contains("FINISH") || u.contains("ABORT")
+                || u.contains("CANCEL") || u.contains("IDLE")) {
+            return true;
+        }
+        // "PENDING" and "EXTENDED" contain the letters END but are not terminal.
+        if (u.contains("PENDING") || u.contains("EXTENDED")) return false;
+        return "END".equals(u) || u.contains("ENDED") || u.contains("_END")
+                || u.contains("END_") || u.contains(" END");
     }
 
     private static String parseTracking(JSONObject body, JSONObject root, JSONObject operation,

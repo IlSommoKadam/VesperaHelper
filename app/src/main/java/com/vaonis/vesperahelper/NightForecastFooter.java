@@ -207,20 +207,9 @@ final class NightForecastFooter {
                 dayLabel.setText(localized.getString(R.string.forecast_footer_loading));
             }
         });
-        if (!InternetNetwork.available(app)) {
-            mainHandler.post(() -> {
-                lastPlace = place;
-                bindPlace(place, country);
-                if (nights.isEmpty()) {
-                    slotsRow.removeAllViews();
-                    dayLabel.setText(localized.getString(R.string.forecast_footer_offline));
-                    updateNavEnabled();
-                } else {
-                    bindCurrentNight(localized, lastZone);
-                }
-            });
-            return;
-        }
+        // Do not stop on ConnectivityManager: on the Pi, eth0/Tailscale can be the
+        // default route while Android only lists the Vespera Wi‑Fi (no INTERNET
+        // capability). HostDns tries that socket first, same path as Telegram.
         TimeZone tz = site.zone();
         OpenMeteoClient.NightResult result = OpenMeteoClient.fetchNightSlots(
                 app, site.siteLat(), site.siteLon(), tz, site.dayEndHour(), site.dayStartHour());
@@ -234,10 +223,14 @@ final class NightForecastFooter {
         bindPlace(lastPlace, country);
         if (result == null || !result.error.isEmpty()
                 || result.nights == null || result.nights.isEmpty()) {
+            String err = result == null ? "" : result.error;
+            if (!nights.isEmpty()) {
+                bindCurrentNight(localized, lastZone);
+                return;
+            }
             nights = new ArrayList<>();
             nightIndex = 0;
             slotsRow.removeAllViews();
-            String err = result == null ? "" : result.error;
             dayLabel.setText(friendlyError(localized, lastPlace, err));
             updateNavEnabled();
             return;

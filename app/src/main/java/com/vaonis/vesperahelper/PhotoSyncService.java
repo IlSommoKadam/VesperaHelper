@@ -125,8 +125,10 @@ public final class PhotoSyncService extends Service {
     /** True after Copia ora / Continua until maybeAutoSync takes the lock. */
     private volatile boolean pendingForceSync;
     private boolean userUnmounted;
-    /** True after automatic power-off (boot offline / telescope shutdown); allows remount when online. */
-    private boolean autoPoweredOff;
+    /** USB VBUS cut (manual «Spegni HD» or morning option). Stays off until Attiva HD. */
+    private volatile boolean autoPoweredOff;
+    /** Serializes mount/wake against USB power-off (morning thread vs. the 2 min tick). */
+    private final Object hdLock = new Object();
     /** User pressed Attiva/Monta — do not auto power-off until app-open / shutdown policy. */
     private boolean manualHdWake;
     /** One-shot launch power-off; further ensure()/BOOTSTRAP must not re-eject after Attiva HD. */
@@ -156,8 +158,9 @@ public final class PhotoSyncService extends Service {
                     Network net = resolveVesperaNetwork();
                     boolean instrumentUp = canReachVesperaFtp(net)
                             || InstrumentWatchdog.probeApiPort(PhotoSyncService.this, net, true) > 0;
-                    if (instrumentUp && !userUnmounted) {
-                        autoPoweredOff = false;
+                    // Do not clear a USB power-off here: waking VBUS right after a cut
+                    // often leaves the enclosure unusable until the cable is replugged.
+                    if (instrumentUp && !userUnmounted && !autoPoweredOff) {
                         ensureMountedForSync();
                     }
                     refreshTelescopeFtpLocked();
@@ -215,7 +218,7 @@ public final class PhotoSyncService extends Service {
         worker.execute(() -> {
             refreshClockAndSun(false);
             refreshMountStatus();
-            maybeAutoMount(); // remounts only if the instrument API/FTP answers
+            maybeAutoMount(); // no-op while the HD is powered off
             refreshTelescopeFtpLocked();
             publish();
             if (syncStore != null
@@ -327,6 +330,9 @@ public final class PhotoSyncService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         hdStore = UsbHdStore.from(this);
+        // A previous USB cut cannot be undone from the Pi. Do not keep the disk locked off.
+        if (hdStore.isPoweredOff()) hdStore.setPoweredOff(false);
+        autoPoweredOff = false;
         syncStore = PhotoSyncStore.from(this);
         selectedSpec = hdStore.getSpec();
         if (selectedSpec.isEmpty()) selectedSpec = UsbDiskStore.from(this).getId();
@@ -435,8 +441,8 @@ public final class PhotoSyncService extends Service {
         } else if (ACTION_UNMOUNT.equals(action)) {
             worker.execute(this::unmountLocked);
         } else if (ACTION_EJECT.equals(action)) {
-            // Manual «Spegni HD»: USB power-off, but allow auto-remount when Vespera is online.
-            worker.execute(() -> powerOffHdLocked(R.string.photo_hd_powered_off_manual));
+            // USB power-off is disabled: the Pi cannot turn the enclosure back on.
+            Log.i(TAG, "HD power-off ignored (checkbox only)");
         } else if (ACTION_SYNC_NOW.equals(action)) {
             pauseRequested.set(false);
             if (syncStore != null) {
@@ -580,8 +586,9 @@ public final class PhotoSyncService extends Service {
             }
         }
         refreshMountStatus();
-        if (!userUnmounted && !autoPoweredOff && isVesperaInstrumentUp()) {
+        if (!userUnmounted && !autoPoweredOff) {
             bindListedDiskIfNeeded();
+            if (!mounted) maybeAutoMount();
         }
     }
 
@@ -613,6 +620,7 @@ public final class PhotoSyncService extends Service {
     }
 
     private void mountLocked(String spec) {
+        synchronized (hdLock) {
         Context localized = AppLocale.wrap(this);
         String use = spec == null || spec.trim().isEmpty() ? selectedSpec : spec.trim();
         if (use.isEmpty()) use = hdStore.getSpec();
@@ -624,6 +632,7 @@ public final class PhotoSyncService extends Service {
         selectedSpec = use;
         userUnmounted = false;
         autoPoweredOff = false;
+        hdStore.setPoweredOff(false);
         manualHdWake = true;
         ejected = false;
         emptyAfterEject = false;
@@ -657,13 +666,16 @@ public final class PhotoSyncService extends Service {
         }
         listDisksLocked();
         publish();
+        }
     }
 
     private void unmountLocked() {
+        synchronized (hdLock) {
         Context localized = AppLocale.wrap(this);
         stopFtpLocked();
         userUnmounted = true;
         autoPoweredOff = false;
+        hdStore.setPoweredOff(false);
         DaemonDisk.MountStatus status = DaemonDisk.unmount(this, selectedSpec);
         applyMountStatus(status);
         if (status.timeout) {
@@ -676,41 +688,17 @@ public final class PhotoSyncService extends Service {
         }
         listDisksLocked();
         publish();
+        }
     }
 
     private void ejectLocked(String spec) {
-        Context localized = AppLocale.wrap(this);
-        String use = spec == null || spec.trim().isEmpty() ? selectedSpec : spec.trim();
-        if (use.isEmpty()) use = hdStore.getSpec();
-        if (use.isEmpty()) use = UsbDiskStore.from(this).getId();
-        if (use.isEmpty()) {
-            message = localized.getString(R.string.photos_select_first);
-            publish();
-            return;
-        }
-        stopFtpLocked();
-        userUnmounted = true;
-        autoPoweredOff = false;
-        DaemonDisk.MountStatus status = DaemonDisk.eject(this, use);
-        applyMountStatus(status);
-        if (status.timeout) {
-            message = localized.getString(R.string.photos_daemon_timeout);
-        } else if (status.raw.startsWith("ejected") || !status.mounted) {
-            ejected = true;
-            emptyAfterEject = false;
-            message = localized.getString(R.string.photos_eject_ok);
-        } else {
-            userUnmounted = false;
-            ejected = false;
-            emptyAfterEject = false;
-            message = localized.getString(R.string.photos_eject_fail, status.raw);
-        }
-        listDisksLocked();
-        publish();
+        Log.i(TAG, "HD eject ignored (checkbox only) spec=" + spec);
     }
 
     private void forgetLocked() {
         Context localized = AppLocale.wrap(this);
+        autoPoweredOff = false;
+        ejected = false;
         hdStore.clear();
         selectedSpec = "";
         message = localized.getString(R.string.photos_forget_ok);
@@ -718,9 +706,9 @@ public final class PhotoSyncService extends Service {
     }
 
     /**
-     * At first service start in this process: if Vespera Wi‑Fi is gone, schedule HD
-     * power-off; remount only if the instrument API/FTP answers. Later {@code ensure()}/
-     * BOOTSTRAP calls only refresh — they must not undo a manual Attiva HD.
+     * At first service start: remount the saved HD if auto-mount is on.
+     * Does not cut USB power (that is morning-check / manual only). Later
+     * {@code ensure()}/BOOTSTRAP calls only refresh after the first pass.
      */
     private void bootstrapHdForConnectionLocked() {
         if (!SystemSettingsStore.from(this).hdMount()) {
@@ -732,39 +720,34 @@ public final class PhotoSyncService extends Service {
             return;
         }
         hdLaunchPowerOffDone = true;
-        Log.i(TAG, "bootstrap: evaluate HD power (once per process)");
+        Log.i(TAG, "bootstrap: remount HD if present");
         applyHdOfflineOrOnlineLocked();
     }
 
-    /** MainActivity opened: re-evaluate HD policy without an immediate eject. */
+    /** MainActivity opened: re-evaluate HD mount without cutting USB power. */
     private void appOpenHdPolicyLocked() {
         if (!SystemSettingsStore.from(this).hdMount()) {
             refreshMountStatus();
             return;
         }
-        Log.i(TAG, "app-open: re-evaluate HD power");
+        Log.i(TAG, "app-open: remount HD if present");
         applyHdOfflineOrOnlineLocked();
         hdLaunchPowerOffDone = true;
     }
 
     private void applyHdOfflineOrOnlineLocked() {
-        if (isVesperaWifiPresent()) {
-            if (!isVesperaInstrumentUp()) {
-                Log.i(TAG, "HD policy: Vespera Wi‑Fi present — leave HD as-is");
+        synchronized (hdLock) {
+            if (userUnmounted || autoPoweredOff) {
                 refreshMountStatus();
                 return;
             }
-            if (userUnmounted) {
-                refreshMountStatus();
-                return;
-            }
-            autoPoweredOff = false;
+            // Mount whenever the disk is present — do not wait for Vespera online.
+            // USB power-off is only morning-check (optional, off by default) or manual «Spegni HD».
             ejected = false;
+            Log.i(TAG, "HD policy: remount saved disk (Vespera wifi="
+                    + isVesperaWifiPresent() + ")");
             bootstrapMountLocked();
-            return;
         }
-        Log.i(TAG, "HD policy: no Vespera Wi‑Fi — leave HD powered (no auto USB cut)");
-        refreshMountStatus();
     }
 
     private void bootstrapMountLocked() {
@@ -781,69 +764,17 @@ public final class PhotoSyncService extends Service {
         }
     }
 
-    /**
-     * SCSI-eject + USB power-off. Does not set {@link #userUnmounted}, so a later
-     * Vespera connection (or Attiva HD) can remount it.
-     */
+    /** USB power-off is disabled: the Pi cannot turn the enclosure back on. */
     private void powerOffHdLocked(int messageRes) {
-        Context localized = AppLocale.wrap(this);
-        // Set before refresh so ensure-bind cannot revive the disk.
-        autoPoweredOff = true;
-        manualHdWake = false;
-        String use = selectedSpec;
-        if (use.isEmpty()) use = hdStore.getSpec();
-        if (use.isEmpty()) use = UsbDiskStore.from(this).getId();
-        if (use.isEmpty() && disksEncoded != null && disksEncoded.length == 1) {
-            UsbDisk only = UsbDisk.parse(disksEncoded[0]);
-            if (only != null) use = only.id();
-        }
-        // Already cleanly off: re-assert USB power-off without spamming the activity log.
-        if (!mounted && ejected && !DaemonDisk.isPhotosBoundLive(DaemonDisk.photosDir(this))) {
-            DaemonDisk.eject(this, use);
-            ejected = true;
-            mounted = false;
-            message = localized.getString(messageRes);
-            publish();
-            return;
-        }
-        stopFtpLocked();
-        DaemonDisk.MountStatus status = DaemonDisk.eject(this, use);
-        applyMountStatus(status);
-        boolean bindLive = DaemonDisk.isPhotosBoundLive(DaemonDisk.photosDir(this));
-        boolean ok = status != null && status.raw != null && status.raw.startsWith("ejected");
-        if (!ok && !bindLive && (status == null || (!status.mounted && !status.timeout))) {
-            ok = true;
-        }
-        if (ok) {
-            userUnmounted = false;
-            ejected = true;
-            emptyAfterEject = false;
-            mounted = false;
-            message = localized.getString(messageRes);
-            SystemActivityLog.record(this, SystemActivityLog.KIND_HD_POWER_OFF,
-                    SystemActivityLog.DETAIL_OK);
-        } else if (status != null && status.timeout) {
-            autoPoweredOff = false;
-            ejected = false;
-            message = localized.getString(R.string.photos_daemon_timeout);
-        } else {
-            autoPoweredOff = false;
-            ejected = false;
-            message = localized.getString(R.string.photos_eject_fail,
-                    status == null || status.raw == null ? "?" : status.raw);
-        }
-        publish();
+        Log.i(TAG, "HD power-off ignored (checkbox only) msg=" + messageRes);
     }
 
     private void maybeAutoMount() {
+        synchronized (hdLock) {
         if (!SystemSettingsStore.from(this).hdMount()) return;
-        if (userUnmounted) return;
-        // Never auto-mount on SSID alone — instrument must answer (API or FTP).
-        if (!isVesperaInstrumentUp()) {
-            Log.i(TAG, "auto-mount skip: telescope silent");
-            return;
-        }
-        autoPoweredOff = false;
+        if (userUnmounted || autoPoweredOff) return;
+        // Mount even with Vespera offline. After a USB power-off, stay off
+        // until Attiva HD — an automatic wake often needs a cable replug.
         if (DaemonDisk.isPhotosBoundLive(DaemonDisk.photosDir(this))) {
             if (!mounted) refreshMountStatus();
             return;
@@ -858,6 +789,7 @@ public final class PhotoSyncService extends Service {
         selectedSpec = spec;
         DaemonDisk.MountStatus status = null;
         for (int attempt = 0; attempt < 3; attempt++) {
+            if (autoPoweredOff) return;
             status = DaemonDisk.mount(this, spec);
             if (status != null && status.mounted) break;
             if (status != null && !status.timeout
@@ -898,20 +830,15 @@ public final class PhotoSyncService extends Service {
             Context localized = AppLocale.wrap(this);
             message = localized.getString(R.string.photos_daemon_timeout);
         }
+        }
     }
 
     private void refreshMountStatus() {
+        synchronized (hdLock) {
         // While intentionally powered off, never ensure-bind (that would remount/wake the HD).
         if (autoPoweredOff) {
+            // Do not eject again: that cuts USB and the Pi cannot power the disk back on.
             DaemonDisk.MountStatus status = DaemonDisk.status(this);
-            if (status != null && status.mounted && !status.timeout) {
-                Log.w(TAG, "HD still reported mounted while powered off — eject again");
-                String use = selectedSpec;
-                if (use.isEmpty()) use = hdStore.getSpec();
-                if (use.isEmpty()) use = UsbDiskStore.from(this).getId();
-                DaemonDisk.eject(this, use);
-                status = DaemonDisk.status(this);
-            }
             if (status == null || status.mounted) {
                 status = DaemonDisk.MountStatus.unmounted("powered-off");
             }
@@ -928,6 +855,7 @@ public final class PhotoSyncService extends Service {
         applyMountStatus(status);
         if (mounted) startFtpLocked();
         else stopFtpLocked();
+        }
     }
 
     private void applyMountStatus(DaemonDisk.MountStatus status) {
@@ -1183,6 +1111,21 @@ public final class PhotoSyncService extends Service {
             retrySunTooHighSoon();
             return;
         }
+        // Wrong Pi clock (no RTC, NTP failed) must not invent a morning.
+        // GENERAL_SUN_TOO_HIGH comes from the instrument and does not use our clock.
+        if (!syncStore.clockTrustedForMorningShutdown() && !snap.isSunTooHigh()) {
+            Log.i(TAG, "sun-too-high skip: clock not NTP-synced — retry");
+            if (!SystemActivityLog.lastKindIs(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
+                    SystemActivityLog.DETAIL_NO_NTP)) {
+                SystemActivityLog.record(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
+                        SystemActivityLog.DETAIL_NO_NTP);
+            }
+            retrySunTooHighSoon();
+            return;
+        }
+        if (!syncStore.clockTrustedForMorningShutdown()) {
+            Log.i(TAG, "sun-too-high: clock not NTP-synced, proceeding on GENERAL_SUN_TOO_HIGH");
+        }
         Log.i(TAG, "morning check — running selected actions (status="
                 + snap.error + " / " + snap.state + ", sunTooHigh="
                 + snap.isSunTooHigh() + ", attempt "
@@ -1255,12 +1198,10 @@ public final class PhotoSyncService extends Service {
             } else {
                 Log.i(TAG, "sun-too-high: photo sync skipped (already completed)");
             }
-            if (hasSuspendedWork() && isVesperaConnected()) {
-                deferShutdownForIncompleteSync(dayKey, sunFlow, attempt, "sync incomplete");
-                return;
-            }
+            // Criterion for power-off is an empty Vespera USER. Local inProgress /
+            // .part leftovers must not block forever after a successful copy.
             Network probeNet = network != null ? network : resolveVesperaNetwork();
-            int remaining = PhotoSyncEngine.countRemotePhotos(probeNet);
+            int remaining = countRemotePhotosForShutdown(probeNet);
             if (remaining > 0) {
                 Log.w(TAG, "Vespera USER still has " + remaining
                         + " photo(s) — defer telescope shutdown");
@@ -1269,11 +1210,23 @@ public final class PhotoSyncService extends Service {
                 return;
             }
             if (remaining < 0 && isVesperaConnected()) {
-                Log.w(TAG, "cannot verify Vespera USER empty — defer telescope shutdown");
-                deferShutdownForIncompleteSync(dayKey, sunFlow, attempt, "remote-user unverified");
-                return;
+                boolean localLeftover = hasSuspendedWork();
+                boolean lastSyncOk = syncStore != null && syncStore.lastOk();
+                if (localLeftover || !lastSyncOk) {
+                    Log.w(TAG, "cannot verify Vespera USER empty — defer telescope shutdown"
+                            + " (localLeftover=" + localLeftover
+                            + " lastOk=" + lastSyncOk + ")");
+                    deferShutdownForIncompleteSync(dayKey, sunFlow, attempt,
+                            "remote-user unverified");
+                    return;
+                }
+                Log.w(TAG, "cannot verify Vespera USER empty — proceed after last OK sync");
+            } else if (hasSuspendedWork()) {
+                Log.w(TAG, "Vespera USER empty — clearing stale sync-in-progress before shutdown");
+                if (syncStore != null) syncStore.clearInProgress(this);
+            } else {
+                Log.i(TAG, "Vespera USER empty — proceed with telescope shutdown");
             }
-            Log.i(TAG, "Vespera USER empty — proceed with telescope shutdown");
         } else if (sunFlow) {
             Log.i(TAG, "sun-too-high: photo sync skipped (disabled)");
         }
@@ -1337,19 +1290,10 @@ public final class PhotoSyncService extends Service {
                         ? R.string.telescope_command_shutdown_ok
                         : R.string.system_sun_result_shutdown_fail));
             }
-            // Morning check only: optional USB power-off after a successful
-            // telescope shutdown. Never on Wi‑Fi loss / boot / manual shutdown —
-            // cutting VBUS often needs a physical cable replug to remount.
+            // «Spegni HD» is only a saved checkbox. Do not cut USB power:
+            // the enclosure cannot be turned back on from the Pi.
             if (sunFlow && settings.sunHdShutdown()) {
-                if (telescopeRequested && telescopeOk) {
-                    powerOffHdLocked(R.string.photo_hd_powered_off_shutdown);
-                    if (msg.length() > 0) msg.append('\n');
-                    msg.append(localized.getString(R.string.photo_hd_powered_off_shutdown));
-                } else if (telescopeRequested) {
-                    Log.i(TAG, "sun-too-high: HD left on after telescope shutdown fail");
-                } else {
-                    Log.i(TAG, "sun-too-high: HD shutdown skipped (telescope shutdown off)");
-                }
+                Log.i(TAG, "sun-too-high: HD power-off checkbox on, USB left powered");
             }
             if (msg.length() > 0) {
                 message = msg.toString();
@@ -1411,6 +1355,22 @@ public final class PhotoSyncService extends Service {
         Context localized = AppLocale.wrap(this);
         message = localized.getString(R.string.telescope_shutdown_syncing);
         publish();
+    }
+
+    /** Retry FTP listing a few times — a single busy socket must not block morning power-off. */
+    private static int countRemotePhotosForShutdown(Network network) {
+        int last = -1;
+        for (int i = 0; i < 3; i++) {
+            last = PhotoSyncEngine.countRemotePhotos(network);
+            if (last >= 0) return last;
+            try {
+                Thread.sleep(2_000L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return last;
+            }
+        }
+        return last;
     }
 
     /** After sun-too-high HD eject, optionally power off the Pi via vespera-netd. */
@@ -1725,6 +1685,10 @@ public final class PhotoSyncService extends Service {
                 } else if (result.error != null) {
                     syncStore.recordFailure(result.error);
                     message = lastErrorLabel(localized, result.error);
+                } else if (!complete) {
+                    // Partial copy: do not mark lastOk — morning shutdown must retry sync.
+                    syncStore.recordFailure("failed=" + result.failed);
+                    message = formatSyncSummary(localized, result, new File(root, "USER"));
                 } else {
                     syncStore.recordSuccess(result.downloaded, result.skipped, result.deleted, result.bytes);
                     syncStore.setPhotosPath(new File(root, "USER").getAbsolutePath());
@@ -1732,8 +1696,9 @@ public final class PhotoSyncService extends Service {
                 }
                 if (autoKind != null) {
                     String detail = paused ? SystemActivityLog.DETAIL_PAUSED
-                            : (result.error != null ? SystemActivityLog.DETAIL_FAIL
-                            : SystemActivityLog.DETAIL_OK);
+                            : (complete && result.error == null
+                            ? SystemActivityLog.DETAIL_OK
+                            : SystemActivityLog.DETAIL_FAIL);
                     SystemActivityLog.record(this, autoKind, detail);
                 }
                 restoreLastSync();
@@ -1768,11 +1733,11 @@ public final class PhotoSyncService extends Service {
     }
 
     private void ensureMountedForSync() {
-        if (userUnmounted) {
+        synchronized (hdLock) {
+        if (userUnmounted || autoPoweredOff) {
             refreshMountStatus();
             return;
         }
-        autoPoweredOff = false;
         refreshMountStatus();
         if (mounted) return;
         if (disksEncoded == null || disksEncoded.length == 0) {
@@ -1781,10 +1746,12 @@ public final class PhotoSyncService extends Service {
             bindListedDiskIfNeeded();
         }
         if (!mounted) maybeAutoMount();
+        }
     }
 
     private void bindListedDiskIfNeeded() {
-        if (mounted || userUnmounted) return;
+        synchronized (hdLock) {
+        if (mounted || userUnmounted || autoPoweredOff) return;
         UsbDisk chosen = null;
         for (String encoded : disksEncoded) {
             UsbDisk disk = UsbDisk.parse(encoded);
@@ -1812,6 +1779,7 @@ public final class PhotoSyncService extends Service {
             message = localized.getString(R.string.photos_mount_ok, hdStore.displayName());
             extraAutoDelayMs = 0;
             scheduleNextAutoSync();
+        }
         }
     }
 
