@@ -29,13 +29,21 @@ final class SystemSettingsStore {
     private static final String KEY_SUN_TOO_HIGH_AT = "sun_too_high_at";
     private static final String KEY_SUN_TOO_HIGH_RESULT = "sun_too_high_result";
     private static final String KEY_SUN_TOO_HIGH_ATTEMPT = "sun_too_high_attempt";
+    /** Last observation/plan id already handled by observation-sun shutdown. */
+    private static final String KEY_SUN_HANDLED_SESSION = "sun_handled_session";
+    /** Ended sun session seen but not yet shut down successfully (survives 45 min JSON window). */
+    private static final String KEY_SUN_PENDING_SESSION = "sun_pending_session";
 
     static final String SUN_RESULT_NOT_STATUS = "not_status";
     static final String SUN_RESULT_TRIGGERED = "triggered";
     static final String SUN_RESULT_SHUTDOWN_OK = "shutdown_ok";
     static final String SUN_RESULT_SHUTDOWN_FAIL = "shutdown_fail";
+    /** Morning window elapsed without a completed morning sync (no further retries today). */
+    static final String SUN_RESULT_WINDOW_CLOSED = "window_closed";
+    /** Morning sync completed (telescope shutdown is event-driven separately). */
+    static final String SUN_RESULT_SYNC_OK = "sync_ok";
 
-    /** Incomplete today's attempt: retry instead of waiting until tomorrow. */
+    /** Incomplete today's morning attempt: retry instead of waiting until tomorrow. */
     static boolean sunTooHighNeedsRetry(String result) {
         return SUN_RESULT_SHUTDOWN_FAIL.equals(result)
                 || SUN_RESULT_TRIGGERED.equals(result)
@@ -165,12 +173,35 @@ final class SystemSettingsStore {
     }
 
     void recordSunTooHigh(int dayKey, String result, int attempt) {
-        boolean done = SUN_RESULT_SHUTDOWN_OK.equals(result);
+        boolean done = SUN_RESULT_SHUTDOWN_OK.equals(result)
+                || SUN_RESULT_WINDOW_CLOSED.equals(result)
+                || SUN_RESULT_SYNC_OK.equals(result);
         prefs.edit()
                 .putInt(KEY_SUN_TOO_HIGH_DAY, dayKey)
                 .putLong(KEY_SUN_TOO_HIGH_AT, System.currentTimeMillis())
                 .putString(KEY_SUN_TOO_HIGH_RESULT, result == null ? "" : result)
                 .putInt(KEY_SUN_TOO_HIGH_ATTEMPT, done ? 0 : Math.max(0, attempt))
                 .commit();
+    }
+
+    String handledSunSessionId() {
+        return prefs.getString(KEY_SUN_HANDLED_SESSION, "");
+    }
+
+    void recordHandledSunSession(String sessionId) {
+        prefs.edit()
+                .putString(KEY_SUN_HANDLED_SESSION, sessionId == null ? "" : sessionId)
+                .putString(KEY_SUN_PENDING_SESSION, "")
+                .commit();
+    }
+
+    String pendingSunSessionId() {
+        return prefs.getString(KEY_SUN_PENDING_SESSION, "");
+    }
+
+    void recordPendingSunSession(String sessionId) {
+        if (sessionId == null || sessionId.isEmpty()) return;
+        if (sessionId.equals(handledSunSessionId())) return;
+        prefs.edit().putString(KEY_SUN_PENDING_SESSION, sessionId).commit();
     }
 }

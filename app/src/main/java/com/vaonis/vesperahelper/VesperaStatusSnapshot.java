@@ -138,11 +138,92 @@ final class VesperaStatusSnapshot {
         return VesperaLastTarget.hasTarget();
     }
 
-    /** True when the instrument reports Vaonis GENERAL_SUN_TOO_HIGH. */
+    /** True when the instrument reports Vaonis GENERAL_SUN_TOO_HIGH anywhere. */
     boolean isSunTooHigh() {
         String blob = (error + " " + state + " " + operationType + " " + step + " " + rawJson)
                 .toUpperCase(java.util.Locale.US);
         return blob.contains("GENERAL_SUN_TOO_HIGH") || blob.contains("SUN_TOO_HIGH");
+    }
+
+    /**
+     * Sun error on a live op or a recently ended one. Includes top-level fields
+     * (init / idle can report sun-too-high without an observation).
+     */
+    boolean isCurrentSunTooHigh() {
+        if (mentionsSun(error) || mentionsSun(state) || mentionsSun(operationType)
+                || mentionsSun(step)) {
+            return true;
+        }
+        org.json.JSONObject body = statusBody();
+        if (body == null) return false;
+        if (opMentionsSun(body.optJSONObject("currentOperation"))) return true;
+        org.json.JSONArray others = body.optJSONArray("otherCurrentOperations");
+        if (others != null) {
+            for (int i = 0; i < others.length(); i++) {
+                if (opMentionsSun(others.optJSONObject(i))) return true;
+            }
+        }
+        return !endedSessionSunTooHighId().isEmpty();
+    }
+
+    /**
+     * True when a recently ended observation/plan session failed with sun-too-high.
+     * Ignores top-level init/idle sun errors and live RUNNING ops.
+     */
+    boolean isEndedObservationSunTooHigh() {
+        return !endedSessionSunTooHighId().isEmpty();
+    }
+
+    /** Live observation or plan still in progress (not yet in previousOperations). */
+    boolean hasLiveObservationOrPlan() {
+        org.json.JSONObject body = statusBody();
+        if (body == null) return isObserving();
+        if (isLiveObsOrPlan(body.optJSONObject("currentOperation"))) return true;
+        org.json.JSONArray others = body.optJSONArray("otherCurrentOperations");
+        if (others != null) {
+            for (int i = 0; i < others.length(); i++) {
+                if (isLiveObsOrPlan(others.optJSONObject(i))) return true;
+            }
+        }
+        return isObserving();
+    }
+
+    private static boolean isLiveObsOrPlan(org.json.JSONObject op) {
+        if (op == null) return false;
+        if (isTerminalOp(op)) return false;
+        String type = op.optString("type", "").toUpperCase(java.util.Locale.US);
+        return type.contains("OBSERVATION") || type.contains("PLAN");
+    }
+
+    /**
+     * Stable id of a terminal observation/plan that ended with sun-too-high
+     * within the recent window, or empty.
+     */
+    String endedSessionSunTooHighId() {
+        org.json.JSONObject body = statusBody();
+        if (body == null) return "";
+        org.json.JSONObject previous = body.optJSONObject("previousOperations");
+        if (previous == null) return "";
+        String obsId = terminalSunSessionId(previous.optJSONObject("observation"), body, "observation");
+        if (!obsId.isEmpty()) return obsId;
+        return terminalSunSessionId(previous.optJSONObject("plan"), body, "plan");
+    }
+
+    private static String terminalSunSessionId(org.json.JSONObject op, org.json.JSONObject body,
+            String kind) {
+        if (op == null || !opMentionsSun(op) || !isTerminalOp(op) || !endedRecently(op, body)) {
+            return "";
+        }
+        String id = op.optString("id", "").trim();
+        if (!id.isEmpty()) return id;
+        long end = op.optLong("endTime", 0L);
+        return kind + ":" + end;
+    }
+
+    private static boolean isTerminalOp(org.json.JSONObject op) {
+        if (op == null) return false;
+        if (op.optBoolean("stopped", false)) return true;
+        return op.has("endTime") && !op.isNull("endTime") && op.optLong("endTime", 0L) > 0L;
     }
 
     boolean isShuttingDown() {
@@ -280,6 +361,35 @@ final class VesperaStatusSnapshot {
             if (isAutoInitOp(item)) return item;
         }
         return null;
+    }
+
+    private static boolean mentionsSun(String text) {
+        if (text == null || text.isEmpty()) return false;
+        String upper = text.toUpperCase(java.util.Locale.US);
+        return upper.contains("GENERAL_SUN_TOO_HIGH") || upper.contains("SUN_TOO_HIGH");
+    }
+
+    private static boolean opMentionsSun(org.json.JSONObject op) {
+        if (op == null) return false;
+        if (mentionsSun(op.optString("error", ""))) return true;
+        Object raw = op.opt("error");
+        if (raw instanceof org.json.JSONObject) {
+            org.json.JSONObject err = (org.json.JSONObject) raw;
+            if (mentionsSun(err.optString("name", "")) || mentionsSun(err.optString("message", ""))) {
+                return true;
+            }
+        }
+        return mentionsSun(op.optString("state", "")) || mentionsSun(op.optString("status", ""));
+    }
+
+    private static boolean endedRecently(org.json.JSONObject op, org.json.JSONObject body) {
+        if (op == null) return false;
+        long end = op.optLong("endTime", 0L);
+        if (end <= 0L) return !op.optBoolean("stopped", false);
+        long now = System.currentTimeMillis();
+        long stamp = body == null ? now : body.optLong("timestamp", now);
+        long window = 45L * 60L * 1000L;
+        return (now >= end && now - end <= window) || (stamp >= end && stamp - end <= window);
     }
 
     private static boolean isAutoInitOp(org.json.JSONObject op) {

@@ -37,6 +37,7 @@ final class SystemActivityLog {
     static final String DETAIL_SHUTDOWN_OK = "shutdown_ok";
     static final String DETAIL_SHUTDOWN_FAIL = "shutdown_fail";
     static final String DETAIL_NO_NTP = "no_ntp";
+    static final String DETAIL_WINDOW_CLOSED = "window_closed";
 
     static final class Entry {
         final long at;

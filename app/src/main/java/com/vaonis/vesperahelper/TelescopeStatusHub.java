@@ -41,6 +41,10 @@ final class TelescopeStatusHub {
     private boolean lastShuttingDown;
     private boolean lastSunTooHigh;
     private boolean lastTracking;
+    /** AUTO_INIT was running on the previous snapshot. */
+    private boolean initRunningSeen;
+    /** Already sent INITIALIZED for the current init cycle. */
+    private boolean initNotified;
     private String lastError = "";
     private String lastInitFailure = "";
     private int lastBattery = -1;
@@ -161,6 +165,8 @@ final class TelescopeStatusHub {
         lastShuttingDown = false;
         lastSunTooHigh = false;
         lastTracking = false;
+        initRunningSeen = false;
+        initNotified = false;
         lastError = "";
         lastInitFailure = "";
         lastBattery = -1;
@@ -174,12 +180,16 @@ final class TelescopeStatusHub {
         lastSnap = snap;
         lastSnapAt = System.currentTimeMillis();
         lastObs = snap.observationStatus == null ? "" : snap.observationStatus;
-        lastInitialized = snap.initialized || snap.isAutoInitFinishedOk() || snap.azAltCalibrated();
+        // A finished AUTO_INIT left in previousOperations must not count as
+        // "already initialized": the arm is often parked and uncalibrated.
+        lastInitialized = snap.initialized || snap.azAltCalibrated();
+        initRunningSeen = snap.isAutoInitRunning();
+        initNotified = false;
         lastInitOk = snap.isAutoInitFinishedOk();
         lastOnMains = snap.isOnMainsPower();
         lastOffMains = snap.isOffMainsPower();
         lastShuttingDown = snap.isShuttingDown();
-        lastSunTooHigh = snap.isSunTooHigh();
+        lastSunTooHigh = snap.isEndedObservationSunTooHigh();
         lastTracking = snap.isTrackingAcquisition();
         lastError = snap.error == null ? "" : snap.error.trim();
         lastInitFailure = snap.autoInitFailure(true);
@@ -194,11 +204,18 @@ final class TelescopeStatusHub {
     }
 
     private void diffSnapshotLocked(VesperaStatusSnapshot snap, List<TelescopeStatusEvent> events) {
-        boolean initialized = snap.initialized || snap.isAutoInitFinishedOk() || snap.azAltCalibrated();
-        if (initialized && !lastInitialized) {
+        boolean ready = snap.initialized || snap.azAltCalibrated();
+        boolean initRunning = snap.isAutoInitRunning();
+        if (initRunning && !initRunningSeen) initNotified = false;
+        boolean initJustFinished = initRunningSeen && !initRunning
+                && snap.autoInitFailure(false).isEmpty();
+        if (!initNotified && ((ready && !lastInitialized) || initJustFinished)) {
             events.add(TelescopeStatusEvent.of(TelescopeStatusEvent.Kind.INITIALIZED, snap));
+            initNotified = true;
         }
-        lastInitialized = initialized;
+        if (!initRunning && !ready && !initJustFinished) initNotified = false;
+        lastInitialized = ready;
+        initRunningSeen = initRunning;
         lastInitOk = snap.isAutoInitFinishedOk();
 
         boolean shutting = snap.isShuttingDown();
@@ -244,7 +261,7 @@ final class TelescopeStatusHub {
             lastObs = obs;
         }
 
-        boolean sun = snap.isSunTooHigh();
+        boolean sun = snap.isEndedObservationSunTooHigh();
         if (sun && !lastSunTooHigh) {
             events.add(TelescopeStatusEvent.of(TelescopeStatusEvent.Kind.SUN_TOO_HIGH, snap));
         }

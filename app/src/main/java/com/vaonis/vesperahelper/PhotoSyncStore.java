@@ -18,8 +18,13 @@ final class PhotoSyncStore {
     static final float DEFAULT_NIGHT_INTERVAL_HOURS = 1f;
     static final float MIN_INTERVAL_HOURS = 0.25f;
     static final float MAX_INTERVAL_HOURS = 12f;
-    /** Delay after civil sunrise before the once-a-day morning shutdown. */
+    /** Delay after civil sunrise before the once-a-day morning photo sync. */
     static final long SUN_TOO_HIGH_AFTER_SUNRISE_MS = 30 * 60_000L;
+    /**
+     * How long the morning photo sync may keep retrying after the window opens.
+     * After this, a pending morning sync is closed until tomorrow.
+     */
+    static final long SUN_TOO_HIGH_WINDOW_MS = 3 * 60 * 60_000L;
 
     private static final String PREFS = "vespera_photo_sync";
     private static final String KEY_START = "day_start_hour";
@@ -209,9 +214,20 @@ final class PhotoSyncStore {
     }
 
     /**
+     * End of today's morning shutdown retries (window open +
+     * {@link #SUN_TOO_HIGH_WINDOW_MS}), or -1.
+     */
+    long sunTooHighWindowCloseAt(long nowMs) {
+        long open = sunTooHighCheckAt(nowMs);
+        if (open <= 0) return -1;
+        return open + SUN_TOO_HIGH_WINDOW_MS;
+    }
+
+    /**
      * Next check time: today's sunrise+30 if that day was not already checked,
      * otherwise tomorrow's sunrise+30. {@code retryToday} keeps today's window
-     * open after a failed or interrupted attempt. Returns -1 without a site.
+     * open after a failed or interrupted attempt, but only until
+     * {@link #sunTooHighWindowCloseAt(long)}. Returns -1 without a site.
      */
     long nextSunTooHighCheckAt(int lastCheckedDay, long nowMs) {
         return nextSunTooHighCheckAt(lastCheckedDay, false, nowMs);
@@ -220,7 +236,9 @@ final class PhotoSyncStore {
     long nextSunTooHighCheckAt(int lastCheckedDay, boolean retryToday, long nowMs) {
         if (!hasSite()) return -1;
         int today = dayKey(nowMs);
-        if (lastCheckedDay == today && !retryToday) {
+        long close = sunTooHighWindowCloseAt(nowMs);
+        boolean retryOpen = retryToday && (close <= 0 || nowMs < close);
+        if (lastCheckedDay == today && !retryOpen) {
             Calendar calendar = Calendar.getInstance(zone());
             calendar.setTimeInMillis(nowMs);
             calendar.add(Calendar.DAY_OF_YEAR, 1);
@@ -228,6 +246,12 @@ final class PhotoSyncStore {
         }
         long window = sunTooHighCheckAt(nowMs);
         if (window <= 0) return -1;
+        if (close > 0 && nowMs >= close) {
+            Calendar calendar = Calendar.getInstance(zone());
+            calendar.setTimeInMillis(nowMs);
+            calendar.add(Calendar.DAY_OF_YEAR, 1);
+            return sunTooHighCheckAt(calendar.getTimeInMillis());
+        }
         return nowMs < window ? window : nowMs;
     }
 

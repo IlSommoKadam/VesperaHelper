@@ -96,6 +96,8 @@ L'app mantiene una richiesta Wi-Fi generica e chiede al daemon root `tools/vespe
 | 0.8.13 | 171 | Montaggio HD all’avvio anche senza Vespera online; netd rimonta da HD_STATE |
 | 0.8.14 | 172 | Controllo mattutino: niente spegnimento se l’orologio non è sincronizzato via NTP (resta attivo solo con GENERAL_SUN_TOO_HIGH) |
 | 0.8.15 | 173 | Meteo: il traffico Internet esce da Ethernet (regola 96), non dal Wi‑Fi Vespera |
+| 0.8.16 | 174 | Meteo: DNS Android allineato a eth static (niente .1 morto) + DoH prima del DNS di sistema lento |
+| 0.8.17 | 175 | Sync mattutina separata dallo spegnimento: telescopio/Pi solo se observation/plan terminati con GENERAL.SUN_TOO_HIGH (no init/orologio) |
 
 Il daemon deve essere avviato come root sul Pi dopo il boot; l'app comunica con esso tramite `net.req` / `disk.req` nella propria directory esterna. Comandi Ethernet su `net.req`: `eth-status`, `eth-dhcp`, `eth-static|ip|prefix|gw|dns1|dns2` (ack su `net.ack`).
 

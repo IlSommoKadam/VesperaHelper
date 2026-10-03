@@ -274,13 +274,13 @@ final class SystemPanel {
         resumeSync.info.setText(resumeSyncInfo(snap.resumeSync));
         sunCheck.info.setText(sunCheckInfo(snap.sunCheck));
         sunSync.info.setText(sunActionInfo(snap.sunSync, snap.sunCheck,
-                R.string.system_sun_sync_info));
-        sunTelescope.info.setText(sunActionInfo(snap.sunTelescopeShutdown, snap.sunCheck,
-                R.string.system_sun_telescope_info));
+                R.string.system_sun_sync_info, R.string.system_sun_requires_check));
+        sunTelescope.info.setText(prefixed(snap.sunTelescopeShutdown,
+                activity.getString(R.string.system_sun_telescope_info)));
         sunHd.info.setText(sunActionInfo(snap.sunHdShutdown, snap.sunCheck,
-                R.string.system_sun_hd_info));
-        sunPiShutdown.info.setText(sunActionInfo(snap.sunPiShutdown, snap.sunCheck,
-                R.string.system_sun_pi_info));
+                R.string.system_sun_hd_info, R.string.system_sun_requires_check));
+        sunPiShutdown.info.setText(sunActionInfo(snap.sunPiShutdown, snap.sunTelescopeShutdown,
+                R.string.system_sun_pi_info, R.string.system_sun_requires_telescope));
         hdMount.info.setText(hdMountInfo(snap.hdMount));
         clockNtp.info.setText(clockInfo(snap.clockNtp));
         bootStart.info.setText(prefixed(snap.bootStart,
@@ -469,10 +469,10 @@ final class SystemPanel {
         return prefixed(enabled, body + "\n" + next + "\n" + last);
     }
 
-    private String sunActionInfo(boolean enabled, boolean checkEnabled, int infoRes) {
+    private String sunActionInfo(boolean enabled, boolean checkEnabled, int infoRes, int requiresRes) {
         String body = activity.getString(infoRes);
         if (!checkEnabled) {
-            body += "\n" + activity.getString(R.string.system_sun_requires_check);
+            body += "\n" + activity.getString(requiresRes);
         }
         return prefixed(enabled, body);
     }
@@ -480,6 +480,13 @@ final class SystemPanel {
     private String sunTooHighResultLabel(String code) {
         if (SystemSettingsStore.SUN_RESULT_SHUTDOWN_OK.equals(code)) {
             return activity.getString(R.string.system_sun_result_shutdown_ok);
+        }
+        if (SystemSettingsStore.SUN_RESULT_SYNC_OK.equals(code)) {
+            return activity.getString(R.string.system_sun_result_sync_ok);
+        }
+        if (SystemSettingsStore.SUN_RESULT_WINDOW_CLOSED.equals(code)
+                || SystemActivityLog.DETAIL_WINDOW_CLOSED.equals(code)) {
+            return activity.getString(R.string.system_sun_result_window_closed);
         }
         if (code != null && code.startsWith(SystemSettingsStore.SUN_RESULT_SHUTDOWN_FAIL)) {
             String label = activity.getString(R.string.system_sun_result_shutdown_fail);

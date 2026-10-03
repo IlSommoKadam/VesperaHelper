@@ -45,6 +45,9 @@ NTFS_DIR="/data/local/tmp/ntfs"
 NTFS_BIN="$NTFS_DIR/mount.ntfs"
 ETH_IFACE="eth0"
 ETH_STATE="/data/local/tmp/vespera-eth.state"
+# Android EthernetNetworkFactory persistent static config (IpConfigStore v3).
+ETH_IPCONFIG="/data/misc/apexdata/com.android.tethering/misc/ethernet/ipconfig.txt"
+ETH_IPCONFIG_LEGACY="/data/misc/ethernet/ipconfig.txt"
 TABLE=94
 PRIORITY=94
 
@@ -1118,12 +1121,90 @@ eth_mode() {
   fi
 }
 
+# Big-endian helpers for IpConfigStore binary (Android 16 dropped ndc resolver).
+eth_be16() {
+  # shellcheck disable=SC2059
+  printf "\\x$(printf '%02x' $(( ($1 >> 8) & 255 )))\\x$(printf '%02x' $(( $1 & 255 )))"
+}
+
+eth_be32() {
+  # shellcheck disable=SC2059
+  printf "\\x$(printf '%02x' $(( ($1 >> 24) & 255 )))\\x$(printf '%02x' $(( ($1 >> 16) & 255 )))\\x$(printf '%02x' $(( ($1 >> 8) & 255 )))\\x$(printf '%02x' $(( $1 & 255 )))"
+}
+
+eth_utf() {
+  s="$1"
+  # BusyBox printf %s length in bytes (ASCII IPs / keys only).
+  n=$(printf '%s' "$s" | wc -c)
+  eth_be16 "$n"
+  printf '%s' "$s"
+}
+
+# Persist static eth0 into Android's IpConfigStore so ConnectivityService DNS/GW
+# match the kernel (otherwise apps resolve via a dead .1 and hang ~10s).
+eth_write_android_ipconfig() {
+  ip_addr="$1"
+  prefix="$2"
+  gw="$3"
+  dns1="$4"
+  dns2="$5"
+  [ -n "$ip_addr" ] && [ -n "$prefix" ] && [ -n "$gw" ] && [ "$gw" != "-" ] || return 1
+  tmp="/data/local/tmp/vespera-ipconfig.$$"
+  {
+    eth_be32 3
+    eth_utf "ipAssignment"
+    eth_utf "STATIC"
+    eth_utf "linkAddress"
+    eth_utf "$ip_addr"
+    eth_be32 "$prefix"
+    eth_utf "gateway"
+    eth_be32 0
+    eth_be32 1
+    eth_utf "$gw"
+    if [ -n "$dns1" ] && [ "$dns1" != "-" ]; then
+      eth_utf "dns"
+      eth_utf "$dns1"
+    fi
+    if [ -n "$dns2" ] && [ "$dns2" != "-" ]; then
+      eth_utf "dns"
+      eth_utf "$dns2"
+    fi
+    eth_utf "proxySettings"
+    eth_utf "NONE"
+    eth_utf "id"
+    eth_utf "$ETH_IFACE"
+    eth_utf "eos"
+  } > "$tmp" 2>/dev/null || return 1
+  for dest in "$ETH_IPCONFIG" "$ETH_IPCONFIG_LEGACY"; do
+    dir=$(dirname "$dest")
+    [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null
+    [ -d "$dir" ] || continue
+    cp "$tmp" "$dest" 2>/dev/null || continue
+    chmod 600 "$dest" 2>/dev/null
+    chown system:system "$dest" 2>/dev/null
+    echo "eth-ipconfig wrote $dest ($ip_addr/$prefix gw=$gw dns=$dns1,$dns2) $(date)" >&2
+  done
+  rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+eth_reload_networkstack() {
+  # Force EthernetNetworkFactory to re-read ipconfig.txt.
+  pid=$(pidof com.android.networkstack.process 2>/dev/null | awk '{print $1}')
+  [ -n "$pid" ] || return 0
+  echo "eth-reload networkstack pid=$pid $(date)" >&2
+  kill "$pid" 2>/dev/null
+  # Give ConnectivityService a moment, then re-assert kernel uplink.
+  sleep 3
+  eth_steer_uplink
+}
+
 eth_set_dns() {
   dns1="$1"
   dns2="$2"
   [ -n "$dns1" ] && setprop net.dns1 "$dns1" 2>/dev/null
   [ -n "$dns2" ] && setprop net.dns2 "$dns2" 2>/dev/null
-  # Best-effort for ConnectivityService resolver.
+  # Best-effort for older images that still speak ndc resolver.
   if [ -n "$dns1" ]; then
     if [ -n "$dns2" ]; then
       ndc resolver setnetdns "$ETH_IFACE" "" "$dns1" "$dns2" >/dev/null 2>&1 \
@@ -1228,6 +1309,13 @@ eth_apply_static() {
   fi
   eth_set_dns "$dns1" "$dns2"
   eth_save_static_state "$ip_addr" "$prefix" "$gw" "$dns1" "$dns2"
+  # Keep Android LinkProperties in sync (DNS/GW). Without this, apps keep
+  # resolving via a stale dead gateway (.1) while the kernel uses $gw.
+  if eth_write_android_ipconfig "$ip_addr" "$prefix" "$gw" "$dns1" "$dns2"; then
+    eth_reload_networkstack
+    eth_set_default_route "$gw"
+    eth_steer_uplink
+  fi
   eth_status
 }
 

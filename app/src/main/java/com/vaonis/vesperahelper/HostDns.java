@@ -63,19 +63,22 @@ final class HostDns {
                 Log.w(TAG, "network DNS failed for " + host + ": " + failure.getMessage());
             }
         }
-        try {
-            InetAddress ipv4 = firstIpv4(InetAddress.getAllByName(host));
-            if (ipv4 != null) return ipv4;
-        } catch (Exception failure) {
-            if (primary == null) primary = failure;
-            Log.w(TAG, "system DNS failed for " + host + ": " + failure.getMessage());
-        }
+        // On the Pi, ConnectivityService often keeps a stale LAN DNS (e.g. .1)
+        // while eth0 actually uses 8.8.8.8. System getAllByName then hangs ~10s
+        // before failing — skip it and go straight to DoH / hardcoded IP.
         InetAddress viaDoh = resolveDoh(context, network, host);
         if (viaDoh != null) return viaDoh;
         InetAddress fallback = hardcodedFallback(host);
         if (fallback != null) {
             Log.i(TAG, host + " -> " + fallback.getHostAddress() + " via hardcoded fallback");
             return fallback;
+        }
+        try {
+            InetAddress ipv4 = firstIpv4(InetAddress.getAllByName(host));
+            if (ipv4 != null) return ipv4;
+        } catch (Exception failure) {
+            if (primary == null) primary = failure;
+            Log.w(TAG, "system DNS failed for " + host + ": " + failure.getMessage());
         }
         throw primary == null ? new Exception("no A record for " + host) : primary;
     }
@@ -214,26 +217,34 @@ final class HostDns {
                 "https://1.1.1.1/dns-query?name=" + host + "&type=A"
         };
         String[] hosts = { "dns.google", "cloudflare-dns.com" };
-        for (int i = 0; i < endpoints.length; i++) {
-            try {
-                // DoH itself talks to a literal IP — use the same SNI socket path.
-                String path = endpoints[i].substring(endpoints[i].indexOf('/', 8));
-                HttpResult result = httpsGetLiteral(network, hosts[i],
-                        i == 0 ? "8.8.8.8" : "1.1.1.1", path);
-                if (result.code >= 400) continue;
-                JSONObject json = new JSONObject(result.body);
-                JSONArray answers = json.optJSONArray("Answer");
-                if (answers == null) continue;
-                for (int a = 0; a < answers.length(); a++) {
-                    JSONObject row = answers.optJSONObject(a);
-                    if (row == null || row.optInt("type", 0) != 1) continue;
-                    String data = row.optString("data", "").trim();
-                    if (data.isEmpty() || !isIpLiteral(data)) continue;
-                    Log.i(TAG, host + " -> " + data + " via DoH");
-                    return InetAddress.getByName(data);
+        Network[] nets = network == null
+                ? new Network[] { null }
+                : new Network[] { network, null };
+        for (Network net : nets) {
+            for (int i = 0; i < endpoints.length; i++) {
+                try {
+                    // DoH itself talks to a literal IP — use the same SNI socket path.
+                    String path = endpoints[i].substring(endpoints[i].indexOf('/', 8));
+                    HttpResult result = httpsGetLiteral(net, hosts[i],
+                            i == 0 ? "8.8.8.8" : "1.1.1.1", path);
+                    if (result.code >= 400) continue;
+                    JSONObject json = new JSONObject(result.body);
+                    JSONArray answers = json.optJSONArray("Answer");
+                    if (answers == null) continue;
+                    for (int a = 0; a < answers.length(); a++) {
+                        JSONObject row = answers.optJSONObject(a);
+                        if (row == null || row.optInt("type", 0) != 1) continue;
+                        String data = row.optString("data", "").trim();
+                        if (data.isEmpty() || !isIpLiteral(data)) continue;
+                        Log.i(TAG, host + " -> " + data + " via DoH"
+                                + (net == null ? " (default)" : " (network)"));
+                        return InetAddress.getByName(data);
+                    }
+                } catch (Exception failure) {
+                    Log.w(TAG, "DoH " + hosts[i] + " via "
+                            + (net == null ? "default" : "network")
+                            + ": " + failure.getMessage());
                 }
-            } catch (Exception failure) {
-                Log.w(TAG, "DoH " + hosts[i] + ": " + failure.getMessage());
             }
         }
         return null;
