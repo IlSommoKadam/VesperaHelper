@@ -40,10 +40,12 @@ final class HostDns {
     static final class HttpResult {
         final int code;
         final String body;
+        final byte[] bytes;
 
-        HttpResult(int code, String body) {
+        HttpResult(int code, String body, byte[] bytes) {
             this.code = code;
             this.body = body == null ? "" : body;
+            this.bytes = bytes == null ? new byte[0] : bytes;
         }
     }
 
@@ -86,6 +88,17 @@ final class HostDns {
     /** HTTPS GET with SNI = host, TCP to resolved IP (works when LAN DNS is broken). */
     static HttpResult httpsGet(Context context, String host, String pathAndQuery) throws Exception {
         return https(context, host, "GET", pathAndQuery, null, null, "application/json");
+    }
+
+    /** HTTPS GET of a small binary body (sky preview). Rejects oversized replies. */
+    static byte[] httpsGetBytes(Context context, String host, String pathAndQuery) throws Exception {
+        HttpResult result = https(context, host, "GET", pathAndQuery, null, null,
+                "image/jpeg,image/*,*/*");
+        if (result.code < 200 || result.code >= 300 || result.bytes.length == 0) {
+            throw new Exception("HTTP " + result.code);
+        }
+        if (result.bytes.length > 2_500_000) throw new Exception("image too large");
+        return result.bytes;
     }
 
     /** HTTPS POST JSON. Same unbound-then-bound sockets as {@link #httpsGet}. */
@@ -276,7 +289,7 @@ final class HostDns {
         } else {
             bodyBytes = Arrays.copyOfRange(raw, bodyStart, raw.length);
         }
-        return new HttpResult(code, new String(bodyBytes, StandardCharsets.UTF_8));
+        return new HttpResult(code, new String(bodyBytes, StandardCharsets.UTF_8), bodyBytes);
     }
 
     private static byte[] decodeChunked(byte[] raw, int offset) {

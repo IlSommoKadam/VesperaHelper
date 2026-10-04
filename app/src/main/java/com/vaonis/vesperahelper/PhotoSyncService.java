@@ -97,6 +97,9 @@ public final class PhotoSyncService extends Service {
     private static final long SUN_TOO_HIGH_RETRY_MS = 10 * 60_000L;
     private static final long OBS_SUN_SHUTDOWN_COOLDOWN_MS = 2 * 60_000L;
     private static final long PI_SHUTDOWN_DELAY_MS = 3_000L;
+    /** Gap between automatic observation resumes after an astrometry stop. */
+    private static final long AUTO_RESUME_COOLDOWN_MS = 4 * 60_000L;
+    private static final int AUTO_RESUME_MAX = 20;
     private static final int[] STORAGE_CHECK_MINUTES = {10, 11};
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -105,6 +108,10 @@ public final class PhotoSyncService extends Service {
     private final Object syncLock = new Object();
     private final AtomicBoolean pauseRequested = new AtomicBoolean(false);
     private final AtomicBoolean sunShutdownRunning = new AtomicBoolean(false);
+    private final AtomicBoolean autoResumeRunning = new AtomicBoolean(false);
+    private long lastAutoResumeAt;
+    private int autoResumeAttempts;
+    private String autoResumeSession = "";
     /** Morning photo sync only — must not block observation-sun shutdown. */
     private final AtomicBoolean morningSyncRunning = new AtomicBoolean(false);
     private final SimpleFtpServer ftpServer = new SimpleFtpServer();
@@ -1109,8 +1116,8 @@ public final class PhotoSyncService extends Service {
             scheduleSunTooHighCheck();
             return;
         }
-        // Morning path is clock-based sync only. Telescope/Pi shutdown is
-        // event-driven on an ended observation/plan with sun-too-high.
+        // Morning window: photo sync, then telescope shutdown if that option is on.
+        // A session that started after sunrise (solar) is left running.
         if (!syncStore.clockTrustedForMorningShutdown()) {
             Log.i(TAG, "morning sync skip: clock not NTP-synced — retry");
             if (!SystemActivityLog.lastKindIs(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
@@ -1127,7 +1134,11 @@ public final class PhotoSyncService extends Service {
             SystemActivityLog.record(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
                     SystemActivityLog.DETAIL_OK);
             maybeKickPendingObservationSunShutdown(settings);
-            scheduleSunTooHighCheck();
+            if (finishMorningTelescopeShutdown(today, settings)) {
+                retrySunTooHighSoon();
+            } else {
+                scheduleSunTooHighCheck();
+            }
             return;
         }
         if (morningSyncRunning.get() || sunShutdownRunning.get()) {
@@ -1231,17 +1242,144 @@ public final class PhotoSyncService extends Service {
         } else if (hasSuspendedWork() && syncStore != null) {
             syncStore.clearInProgress(this);
         }
-        settings.recordSunTooHigh(dayKey, SystemSettingsStore.SUN_RESULT_SYNC_OK, 0);
         SystemActivityLog.record(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
                 SystemActivityLog.DETAIL_OK);
         Log.i(TAG, "morning sync ok");
-        scheduleSunTooHighCheck();
+        if (finishMorningTelescopeShutdown(dayKey, settings)) {
+            retrySunTooHighSoon();
+        } else {
+            if (!settings.sunTelescopeShutdown()) {
+                settings.recordSunTooHigh(dayKey, SystemSettingsStore.SUN_RESULT_SYNC_OK, 0);
+            }
+            scheduleSunTooHighCheck();
+        }
+    }
+
+    /**
+     * After the morning photo sync: park and power off if the telescope is
+     * still on. Skips a live session that started at or after today's sunrise.
+     *
+     * @return true when shutdown failed and the morning window should retry
+     */
+    private boolean finishMorningTelescopeShutdown(int dayKey, SystemSettingsStore settings) {
+        if (settings == null || !settings.sunTelescopeShutdown()) return false;
+        if (syncStore == null || !syncStore.clockTrustedForMorningShutdown()) return false;
+        if (!isVesperaConnected()) {
+            Log.i(TAG, "morning shutdown deferred — Vespera offline");
+            settings.recordSunTooHigh(dayKey, SystemSettingsStore.SUN_RESULT_SHUTDOWN_FAIL);
+            return true;
+        }
+        Network network = resolveVesperaNetwork();
+        if (network == null) {
+            settings.recordSunTooHigh(dayKey, SystemSettingsStore.SUN_RESULT_SHUTDOWN_FAIL);
+            return true;
+        }
+        int apiPort = currentApiPort();
+        VesperaStatusSnapshot snap = freshSnapshot(network, apiPort);
+        long rise = syncStore.sunriseMs(System.currentTimeMillis());
+        if (snap != null && isLiveUserSession(snap)) {
+            long start = snap.liveSessionStartMs();
+            if (start <= 0L || (rise > 0L && start >= rise)) {
+                Log.i(TAG, "morning shutdown skipped — session started after sunrise");
+                settings.recordSunTooHigh(dayKey, SystemSettingsStore.SUN_RESULT_SYNC_OK, 0);
+                SystemActivityLog.record(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
+                        "shutdown skip daytime-session");
+                return false;
+            }
+        }
+        Log.i(TAG, "morning window — park and shutdown telescope");
+        boolean ok = lastSyncThenShutdown("morning:" + dayKey, network, apiPort);
+        settings.recordSunTooHigh(dayKey, ok
+                ? SystemSettingsStore.SUN_RESULT_SHUTDOWN_OK
+                : SystemSettingsStore.SUN_RESULT_SHUTDOWN_FAIL);
+        return !ok;
+    }
+
+    private int currentApiPort() {
+        VesperaPortScan scan = VesperaPortScanner.lastScan();
+        if (scan != null && scan.apiRestPort > 0) return scan.apiRestPort;
+        return -1;
+    }
+
+    private VesperaStatusSnapshot freshSnapshot(Network network, int apiPort) {
+        TelescopeStatusHub hub = TelescopeStatusHub.ensure();
+        VesperaStatusSnapshot snap = hub.lastSnapshot();
+        if (snap != null && hub.snapshotAgeMs() <= 180_000L) return snap;
+        snap = VesperaStatusClient.fetch(PhotoSyncEngine.HOST, apiPort, network);
+        if (snap != null) hub.ingestSnapshot(snap);
+        return snap;
+    }
+
+    /**
+     * Restart a session the firmware stopped for astrometry/guiding, while the
+     * target is still above {@link SkyPosition#MIN_OBSERVE_ALT_DEG} and civil
+     * sunrise has not arrived. Does not resume a parked arm or a sun error.
+     */
+    private void maybeAutoResumeObservation() {
+        if (sunShutdownRunning.get() || morningSyncRunning.get()) return;
+        if (!autoResumeRunning.compareAndSet(false, true)) return;
+        try {
+            if (!isVesperaConnected() || syncStore == null || !syncStore.hasSite()) return;
+            if (!syncStore.clockTrustedForMorningShutdown()) return;
+            if (WeatherProtectionStore.from(this).protectionActive()) return;
+            long now = System.currentTimeMillis();
+            long rise = syncStore.sunriseMs(now);
+            if (rise > 0L && now >= rise) return;
+            VesperaStatusSnapshot snap = TelescopeStatusHub.ensure().lastSnapshot();
+            if (snap == null || snap.isShuttingDown() || snap.isArmClosed()
+                    || snap.isAutoInitRunning() || isLiveUserSession(snap)
+                    || snap.isSunTooHigh()) {
+                return;
+            }
+            String session = snap.astrometryResumeKey();
+            if (session.isEmpty()) return;
+            double[] eq = snap.stoppedTargetRaDec();
+            if (eq == null) eq = VesperaLastTarget.raDec();
+            if (eq == null) {
+                Log.i(TAG, "auto-resume skip: no target coordinates");
+                return;
+            }
+            double alt = SkyPosition.altitudeDeg(
+                    syncStore.siteLat(), syncStore.siteLon(), eq[0], eq[1], now);
+            if (Double.isNaN(alt) || alt < SkyPosition.MIN_OBSERVE_ALT_DEG) {
+                Log.i(TAG, "auto-resume skip: target altitude " + alt);
+                if (!SystemActivityLog.lastKindIs(this, SystemActivityLog.KIND_OBS_RESUME,
+                        "target-low")) {
+                    SystemActivityLog.record(this, SystemActivityLog.KIND_OBS_RESUME, "target-low");
+                }
+                return;
+            }
+            if (!session.equals(autoResumeSession)) {
+                autoResumeSession = session;
+                autoResumeAttempts = 0;
+            }
+            if (autoResumeAttempts >= AUTO_RESUME_MAX) return;
+            if (lastAutoResumeAt > 0 && now - lastAutoResumeAt < AUTO_RESUME_COOLDOWN_MS) return;
+            Network network = resolveVesperaNetwork();
+            if (network == null) return;
+            autoResumeAttempts++;
+            lastAutoResumeAt = now;
+            String label = VesperaLastTarget.label();
+            Log.i(TAG, "auto-resume " + label + " alt=" + Math.round(alt)
+                    + " attempt=" + autoResumeAttempts + " session=" + session);
+            VesperaCommandClient.Result result = VesperaCommandClient.send(
+                    PhotoSyncEngine.HOST, currentApiPort(), network,
+                    VesperaCommandClient.Command.RESUME,
+                    new VesperaLocationClient.Site(syncStore.siteLat(), syncStore.siteLon()));
+            boolean ok = result != null && result.success;
+            SystemActivityLog.record(this, SystemActivityLog.KIND_OBS_RESUME,
+                    ok ? SystemActivityLog.DETAIL_OK
+                            : (SystemActivityLog.DETAIL_FAIL + " " + describeResult(result)));
+            Log.i(TAG, "auto-resume " + (ok ? "ok" : "fail") + " " + describeResult(result));
+        } finally {
+            autoResumeRunning.set(false);
+        }
     }
 
     /**
      * If an observation/plan recently ended with GENERAL.SUN_TOO_HIGH, sync
      * remaining USER photos then park+shutdown (and optional Pi). Never runs
-     * on idle init sun errors or on the sunrise clock alone.
+     * on idle init sun errors. The morning window has its own shutdown.
      */
     private void maybeObservationSunShutdown() {
         SystemSettingsStore settings = SystemSettingsStore.from(this);
@@ -1314,13 +1452,17 @@ public final class PhotoSyncService extends Service {
 
     /**
      * Copy remaining USER photos, then power off the telescope. Used by the
-     * observation-sun path and by the manual shutdown button.
-     * {@code sessionId} non-null = ended observation/plan sun-too-high flow
-     * (records handled session + optional Pi). {@code null} = manual.
-     * After sync, sends PARK then waits (poll every minute) then SHUTDOWN.
+     * observation-sun path, the morning window, and the manual shutdown button.
+     * {@code sessionId} non-null = automatic flow (records handled session +
+     * optional Pi). A {@code morning:} id also stops a night session still
+     * running. {@code null} = manual. After sync, sends PARK (unless the arm
+     * is already closed) then SHUTDOWN.
+     *
+     * @return true when the telescope accepted shutdown
      */
-    private void lastSyncThenShutdown(String sessionId, Network network, int apiPort) {
+    private boolean lastSyncThenShutdown(String sessionId, Network network, int apiPort) {
         boolean obsFlow = sessionId != null && !sessionId.isEmpty();
+        boolean morningClock = sessionId != null && sessionId.startsWith("morning:");
         SystemSettingsStore settings = SystemSettingsStore.from(this);
         pauseRequested.set(false);
         if (syncStore != null) {
@@ -1341,7 +1483,7 @@ public final class PhotoSyncService extends Service {
                     + " photo(s) — defer telescope shutdown");
             deferShutdownForIncompleteSync(obsFlow,
                     "remote-user " + remaining + " left");
-            return;
+            return false;
         }
         if (remaining < 0 && isVesperaConnected()) {
             boolean localLeftover = hasSuspendedWork();
@@ -1351,7 +1493,7 @@ public final class PhotoSyncService extends Service {
                         + " (localLeftover=" + localLeftover
                         + " lastOk=" + lastSyncOk + ")");
                 deferShutdownForIncompleteSync(obsFlow, "remote-user unverified");
-                return;
+                return false;
             }
             Log.w(TAG, "cannot verify Vespera USER empty — proceed after last OK sync");
         } else if (hasSuspendedWork()) {
@@ -1369,31 +1511,48 @@ public final class PhotoSyncService extends Service {
         }
         // Re-check before PARK: user may have started a solar session during sync.
         // Fail closed if status cannot be refreshed — never PARK on a stale snapshot.
+        VesperaStatusSnapshot live = null;
         if (obsFlow) {
-            VesperaStatusSnapshot live = VesperaStatusClient.fetch(PhotoSyncEngine.HOST, port, net);
+            live = VesperaStatusClient.fetch(PhotoSyncEngine.HOST, port, net);
             if (live == null) {
-                Log.w(TAG, "observation sun-too-high abort before park — status refresh failed");
+                Log.w(TAG, "shutdown abort before park — status refresh failed");
                 SystemActivityLog.record(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
                         "obs abort status-refresh");
-                return;
+                return false;
             }
             TelescopeStatusHub.ensure().ingestSnapshot(live);
-            if (isLiveUserSession(live)) {
+            if (isLiveUserSession(live) && !morningClock) {
                 Log.i(TAG, "observation sun-too-high abort before park — live session");
                 SystemActivityLog.record(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
                         "obs abort live-session");
-                return;
+                return false;
+            }
+            if (morningClock && isLiveUserSession(live)) {
+                Log.i(TAG, "morning shutdown — stopping night session before park");
+                if (!stopLiveObservation(net, port)) {
+                    SystemActivityLog.record(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
+                            "obs stop-before-park fail");
+                    return false;
+                }
+                live = VesperaStatusClient.fetch(PhotoSyncEngine.HOST, port, net);
+                if (live != null) TelescopeStatusHub.ensure().ingestSnapshot(live);
             }
         }
         boolean telescopeOk = false;
         final String stepLabel = "park+shutdown";
         VesperaCommandClient.Result result;
         try {
-            result = VesperaCommandClient.send(
-                    PhotoSyncEngine.HOST, port, net,
-                    VesperaCommandClient.Command.PARK);
-            Log.i(TAG, "park before shutdown " + describeResult(result));
-            if (!waitUntilTelescopeIdleAfterPark(net, port, "after park")) {
+            boolean alreadyParked = live != null && live.isArmClosed();
+            if (alreadyParked) {
+                Log.i(TAG, "arm already closed — shutdown without another park");
+                result = new VesperaCommandClient.Result(true, 200, "already_parked");
+            } else {
+                result = VesperaCommandClient.send(
+                        PhotoSyncEngine.HOST, port, net,
+                        VesperaCommandClient.Command.PARK);
+                Log.i(TAG, "park before shutdown " + describeResult(result));
+            }
+            if (!alreadyParked && !waitUntilTelescopeIdleAfterPark(net, port, "after park")) {
                 result = new VesperaCommandClient.Result(false, -1, "busy_after_park");
                 if (obsFlow) {
                     SystemActivityLog.record(this, SystemActivityLog.KIND_SUN_TOO_HIGH,
@@ -1422,7 +1581,7 @@ public final class PhotoSyncService extends Service {
                     ? R.string.telescope_command_shutdown_ok
                     : R.string.system_sun_result_shutdown_fail);
             publish();
-            // Pi only after a successful telescope shutdown on the observation path.
+            // Pi only after a successful telescope shutdown on the automatic path.
             if (obsFlow && telescopeOk && settings.sunPiShutdown()) {
                 schedulePiShutdownAfterSunTooHigh();
             }
@@ -1430,6 +1589,28 @@ public final class PhotoSyncService extends Service {
             // Observation path retries while the ended sun session stays recent;
             // maybeObservationSunShutdown is polled from the status tick.
         }
+        return telescopeOk;
+    }
+
+    /** Stop a live observation and wait until it is no longer running. */
+    private boolean stopLiveObservation(Network net, int port) {
+        VesperaCommandClient.Result stop = VesperaCommandClient.send(
+                PhotoSyncEngine.HOST, port, net, VesperaCommandClient.Command.STOP);
+        Log.i(TAG, "stop before morning shutdown " + describeResult(stop));
+        long deadline = System.currentTimeMillis() + 90_000L;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(4_000L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            VesperaStatusSnapshot snap = VesperaStatusClient.fetch(PhotoSyncEngine.HOST, port, net);
+            if (snap == null) continue;
+            TelescopeStatusHub.ensure().ingestSnapshot(snap);
+            if (!isLiveUserSession(snap)) return true;
+        }
+        return false;
     }
 
     private static String describeResult(VesperaCommandClient.Result result) {
@@ -1612,6 +1793,7 @@ public final class PhotoSyncService extends Service {
                         && !settings.pendingSunSessionId().equals(settings.handledSunSessionId()))) {
                     syncExecutor.execute(this::maybeObservationSunShutdown);
                 }
+                syncExecutor.execute(this::maybeAutoResumeObservation);
             }
             DaemonDisk.Space space = DaemonDisk.photosSpace(this);
             if (space != null && space.known) {

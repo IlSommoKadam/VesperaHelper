@@ -174,6 +174,82 @@ final class VesperaStatusSnapshot {
         return !endedSessionSunTooHighId().isEmpty();
     }
 
+    /**
+     * Id of a stopped observation the firmware still marks RESUME after an
+     * astrometry/guiding failure. Empty for user stops, sun errors, and
+     * finished sessions.
+     */
+    String astrometryResumeKey() {
+        org.json.JSONObject op = previousObservation();
+        if (op == null || !isTerminalOp(op)) return "";
+        if (opMentionsSun(op)) return "";
+        org.json.JSONObject store = op.optJSONObject("store");
+        String state = store == null ? "" : store.optString("state", "");
+        String upperState = state.toUpperCase(java.util.Locale.US);
+        boolean resumable = upperState.contains("TO_BE_RESUMABLE")
+                || "RESUME".equals(upperState)
+                || (upperState.contains("RESUMABLE") && !upperState.contains("NON"));
+        if (!resumable) return "";
+        String blob = errorText(op);
+        org.json.JSONObject capture = op.optJSONObject("capture");
+        if (capture != null) blob = blob + " " + errorText(capture);
+        if (!blob.contains("ASTROMETRY") && !blob.contains("GUIDING")) return "";
+        String id = op.optString("id", "").trim();
+        long end = op.optLong("endTime", 0L);
+        if (id.isEmpty() && end <= 0L) return "";
+        return (id.isEmpty() ? "observation" : id) + ":" + end;
+    }
+
+    /** RA/Dec degrees of the stopped observation target, or null. */
+    double[] stoppedTargetRaDec() {
+        org.json.JSONObject op = previousObservation();
+        if (op == null) return null;
+        org.json.JSONObject target = op.optJSONObject("target");
+        if (target == null) target = op.optJSONObject("object");
+        if (target == null) return null;
+        if (!target.has("ra") || !target.has("de")) return null;
+        try {
+            return new double[] { target.getDouble("ra"), target.getDouble("de") };
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** startTime of a live observation/plan, or 0 if none / unknown. */
+    long liveSessionStartMs() {
+        org.json.JSONObject body = statusBody();
+        if (body == null) return 0L;
+        long start = liveStartOf(body.optJSONObject("currentOperation"));
+        if (start > 0L) return start;
+        org.json.JSONArray others = body.optJSONArray("otherCurrentOperations");
+        if (others == null) return 0L;
+        for (int i = 0; i < others.length(); i++) {
+            start = liveStartOf(others.optJSONObject(i));
+            if (start > 0L) return start;
+        }
+        return 0L;
+    }
+
+    private org.json.JSONObject previousObservation() {
+        org.json.JSONObject body = statusBody();
+        if (body == null) return null;
+        org.json.JSONObject previous = body.optJSONObject("previousOperations");
+        if (previous == null) return null;
+        return previous.optJSONObject("observation");
+    }
+
+    private static long liveStartOf(org.json.JSONObject op) {
+        if (op == null || !isLiveObsOrPlan(op)) return 0L;
+        return op.optLong("startTime", 0L);
+    }
+
+    private static String errorText(org.json.JSONObject op) {
+        if (op == null) return "";
+        Object raw = op.opt("error");
+        if (raw == null || raw == org.json.JSONObject.NULL) return "";
+        return String.valueOf(raw).toUpperCase(java.util.Locale.US);
+    }
+
     /** Live observation or plan still in progress (not yet in previousOperations). */
     boolean hasLiveObservationOrPlan() {
         org.json.JSONObject body = statusBody();
@@ -259,11 +335,27 @@ final class VesperaStatusSnapshot {
         if (isAutoInitRunning()) return false;
         org.json.JSONObject prev = previousAutoInit();
         if (prev == null) return false;
-        if (!prev.optBoolean("stopped", false)
-                && !(prev.has("endTime") && !prev.isNull("endTime"))) {
-            return false;
-        }
+        if (!isTerminalOp(prev)) return false;
         return autoInitErrorName(prev).isEmpty();
+    }
+
+    /**
+     * Id of an AUTO_INIT that has stopped without error and already includes
+     * autofocus. Empty while init is still running, failed, or focus is not
+     * recorded yet — motor calibration alone is not enough.
+     */
+    String finishedAutoInitAfterFocusId() {
+        if (isAutoInitRunning()) return "";
+        org.json.JSONObject prev = previousAutoInit();
+        if (prev == null || !isTerminalOp(prev)) return "";
+        if (!autoInitErrorName(prev).isEmpty()) return "";
+        if (!autoInitHasFocus(prev)) return "";
+        String id = prev.optString("id", "").trim();
+        if (!id.isEmpty()) return id;
+        long end = prev.optLong("endTime", 0L);
+        if (end > 0L) return "end:" + end;
+        long start = prev.optLong("startTime", 0L);
+        return start > 0L ? ("start:" + start) : "";
     }
 
     /** AZ+ALT reported calibrated — typical after a successful auto-init. */
@@ -390,6 +482,31 @@ final class VesperaStatusSnapshot {
         long stamp = body == null ? now : body.optLong("timestamp", now);
         long window = 45L * 60L * 1000L;
         return (now >= end && now - end <= window) || (stamp >= end && stamp - end <= window);
+    }
+
+    /** Completed autofocus on a finished AUTO_INIT (focusResult or AUTO_FOCUS step). */
+    private static boolean autoInitHasFocus(org.json.JSONObject op) {
+        org.json.JSONObject focus = op.optJSONObject("focusResult");
+        if (focus != null && (focus.has("map") || focus.has("focusValue") || focus.has("position"))) {
+            return true;
+        }
+        return stepsHaveFinishedFocus(op.optJSONArray("steps"));
+    }
+
+    private static boolean stepsHaveFinishedFocus(org.json.JSONArray steps) {
+        if (steps == null) return false;
+        for (int i = 0; i < steps.length(); i++) {
+            org.json.JSONObject step = steps.optJSONObject(i);
+            if (step == null) continue;
+            String type = step.optString("type", "").toUpperCase(java.util.Locale.US);
+            if (type.contains("FOCUS")) {
+                boolean failed = step.has("error") && !step.isNull("error");
+                if (!failed && step.has("autoFocus") && !step.isNull("autoFocus")) return true;
+                if (!failed && step.optDouble("progress", 0) >= 1.0) return true;
+            }
+            if (stepsHaveFinishedFocus(step.optJSONArray("steps"))) return true;
+        }
+        return false;
     }
 
     private static boolean isAutoInitOp(org.json.JSONObject op) {

@@ -344,6 +344,9 @@ final class SystemPanel {
         if (SystemActivityLog.KIND_RESUME_SYNC.equals(kind)) {
             return activity.getString(R.string.system_resume_sync_title);
         }
+        if (SystemActivityLog.KIND_OBS_RESUME.equals(kind)) {
+            return activity.getString(R.string.system_obs_resume_title);
+        }
         if (SystemActivityLog.KIND_SUN_TOO_HIGH.equals(kind)) {
             return activity.getString(R.string.system_sun_check_title);
         }
@@ -395,6 +398,9 @@ final class SystemPanel {
         }
         if (SystemActivityLog.KIND_SUN_TOO_HIGH.equals(kind)) {
             return sunTooHighResultLabel(detail);
+        }
+        if (SystemActivityLog.KIND_OBS_RESUME.equals(kind) && "target-low".equals(detail)) {
+            return activity.getString(R.string.system_obs_resume_low);
         }
         return detail == null || detail.isEmpty() ? "—" : detail;
     }

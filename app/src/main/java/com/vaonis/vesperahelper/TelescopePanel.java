@@ -54,7 +54,25 @@ final class TelescopePanel {
     private final FixedScrollView scroll;
     private final LinearLayout statusBox;
     private final TextView commandResult;
+    private final TextView sniffStatus;
+    private TargetObserveSection observeSection;
+    private final TextView sniffLog;
+    private final Button sniffToggle;
     private final TextView lastUpdate;
+    private final SingularityCommandSniffer.Ui sniffUi = new SingularityCommandSniffer.Ui() {
+        @Override
+        public void onState(boolean running, String code) {
+            mainHandler.post(() -> applySniffState(running, code));
+        }
+
+        @Override
+        public void onLog(String text) {
+            mainHandler.post(() -> sniffLog.setText(
+                    text == null || text.isEmpty()
+                            ? activity.getString(R.string.telescope_sniff_idle)
+                            : text));
+        }
+    };
     private final TextView portInventory;
     private final Button refreshStatus;
     private final Button cmdPark;
@@ -166,6 +184,42 @@ final class TelescopePanel {
         layout.addView(cmdShutdown);
         layout.addView(cmdUploadSwu);
         layout.addView(commandResult);
+
+        observeSection = new TargetObserveSection(activity, density, new TargetObserveSection.Bridge() {
+            @Override public boolean connected() { return isConnected(); }
+            @Override public String host() { return host; }
+            @Override public int apiPort() { return resolveApiPort(); }
+            @Override public Network network() { return VesperaConnectionService.getActiveNetwork(); }
+            @Override public VesperaStatusSnapshot status() { return lastSnap; }
+            @Override public VesperaLocationClient.Site site() {
+                return resolveInitSite(VesperaConnectionService.getActiveNetwork(), lastSnap);
+            }
+            @Override public boolean beginCommand() { return beginObserveCommand(); }
+            @Override public void endCommand() { endObserveCommand(); }
+        });
+        layout.addView(observeSection.view());
+
+        layout.addView(section(activity.getString(R.string.telescope_section_sniff)));
+        TextView sniffHint = body(activity.getString(R.string.telescope_sniff_hint));
+        sniffHint.setTextSize(13);
+        layout.addView(sniffHint);
+        sniffStatus = body("");
+        sniffStatus.setTextSize(13);
+        sniffToggle = action(activity.getString(R.string.telescope_sniff_start), UiStyle.STEEL_BLUE);
+        sniffToggle.setOnClickListener(v -> toggleSniff());
+        Button sniffClear = action(activity.getString(R.string.telescope_sniff_clear), UiStyle.SLATE);
+        sniffClear.setOnClickListener(v -> SingularityCommandSniffer.clear());
+        sniffLog = body("");
+        sniffLog.setTextSize(12);
+        sniffLog.setTypeface(Typeface.MONOSPACE);
+        sniffLog.setTextIsSelectable(true);
+        layout.addView(sniffStatus);
+        layout.addView(sniffToggle);
+        layout.addView(sniffClear);
+        layout.addView(sniffLog);
+        SingularityCommandSniffer.setUi(sniffUi);
+        refreshSniffStatus();
+
         layout.addView(section(activity.getString(R.string.telescope_section_ports)));
         portInventory = body(activity.getString(R.string.port_inventory_idle));
         portInventory.setTextSize(13);
@@ -193,6 +247,8 @@ final class TelescopePanel {
         visible = true;
         powerWarningIgnoredThisVisit = false;
         photoUsageForceOnOpen = true;
+        SingularityCommandSniffer.setUi(sniffUi);
+        refreshSniffStatus();
         refreshPortInventory();
         if (lastSnap != null) maybeShowPowerWarning(lastSnap);
         refreshStatusNow(true);
@@ -398,6 +454,7 @@ final class TelescopePanel {
     /** Updates status without scrolling the tab back to the top. */
     private void setStatusSnapshot(VesperaStatusSnapshot snap, String updated) {
         lastSnap = snap;
+        if (observeSection != null) observeSection.onStatus(snap);
         maybeProbePhotoUsage(snap);
         refillStatusKeepingScroll();
         if (updated != null) lastUpdate.setText(updated);
@@ -810,6 +867,17 @@ final class TelescopePanel {
 
     private void setCommandsEnabled(boolean enabled) {
         applyCommandEnablement(enabled);
+    }
+
+    private boolean beginObserveCommand() {
+        if (!commandInFlight.compareAndSet(false, true)) return false;
+        applyCommandEnablement(false);
+        return true;
+    }
+
+    private void endObserveCommand() {
+        commandInFlight.set(false);
+        applyCommandEnablement(true);
     }
 
     /** Enable/disable command buttons; Init stays off if already init or observing. */
@@ -1371,5 +1439,56 @@ final class TelescopePanel {
         lp.bottomMargin = (int) (8 * density);
         button.setLayoutParams(lp);
         return button;
+    }
+
+    private void toggleSniff() {
+        sniffToggle.setEnabled(false);
+        if (SingularityCommandSniffer.isRunning()) {
+            SingularityCommandSniffer.stop(activity);
+        } else {
+            SingularityCommandSniffer.start(
+                    activity, host, VesperaConnectionService.getActiveNetwork());
+        }
+    }
+
+    private void refreshSniffStatus() {
+        applySniffState(SingularityCommandSniffer.isRunning(),
+                SingularityCommandSniffer.isRunning() ? "on" : "idle");
+    }
+
+    private void applySniffState(boolean running, String code) {
+        sniffToggle.setEnabled(true);
+        sniffToggle.setText(activity.getString(running
+                ? R.string.telescope_sniff_stop
+                : R.string.telescope_sniff_start));
+        String installed = singularityInstalled()
+                ? activity.getString(R.string.telescope_sniff_installed)
+                : activity.getString(R.string.telescope_sniff_missing);
+        sniffStatus.setText(installed + "\n" + sniffMessage(code));
+    }
+
+    private boolean singularityInstalled() {
+        try {
+            activity.getPackageManager().getPackageInfo(SingularityCommandSniffer.PKG, 0);
+            return true;
+        } catch (Exception missing) {
+            return false;
+        }
+    }
+
+    private String sniffMessage(String code) {
+        if (code == null) code = "idle";
+        switch (code) {
+            case "starting": return activity.getString(R.string.telescope_sniff_starting);
+            case "on": return activity.getString(R.string.telescope_sniff_on);
+            case "off": return activity.getString(R.string.telescope_sniff_off);
+            case "daemon": return activity.getString(R.string.telescope_sniff_err_daemon);
+            case "iptables": return activity.getString(R.string.telescope_sniff_err_iptables);
+            case "no-uid": return activity.getString(R.string.telescope_sniff_err_uid);
+            case "bind": return activity.getString(R.string.telescope_sniff_err_bind);
+            case "timeout": return activity.getString(R.string.telescope_sniff_err_timeout);
+            case "proxy-down": return activity.getString(R.string.telescope_sniff_err_proxy);
+            default: return activity.getString(R.string.telescope_sniff_idle);
+        }
     }
 }

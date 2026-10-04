@@ -17,6 +17,7 @@ final class SystemActivityLog {
     static final String KIND_PHOTO_SYNC = "photo_sync";
     static final String KIND_STORAGE_SYNC = "storage_sync";
     static final String KIND_RESUME_SYNC = "resume_sync";
+    static final String KIND_OBS_RESUME = "obs_resume";
     static final String KIND_SUN_TOO_HIGH = "sun_too_high";
     static final String KIND_PI_SHUTDOWN = "pi_shutdown";
     static final String KIND_HD_MOUNT = "hd_mount";

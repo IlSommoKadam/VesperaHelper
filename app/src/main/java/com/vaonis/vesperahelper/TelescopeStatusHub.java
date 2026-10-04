@@ -45,6 +45,8 @@ final class TelescopeStatusHub {
     private boolean initRunningSeen;
     /** Already sent INITIALIZED for the current init cycle. */
     private boolean initNotified;
+    /** Last AUTO_INIT id that already finished after focus. */
+    private String lastFinishedInitId = "";
     private String lastError = "";
     private String lastInitFailure = "";
     private int lastBattery = -1;
@@ -167,6 +169,7 @@ final class TelescopeStatusHub {
         lastTracking = false;
         initRunningSeen = false;
         initNotified = false;
+        lastFinishedInitId = "";
         lastError = "";
         lastInitFailure = "";
         lastBattery = -1;
@@ -185,6 +188,7 @@ final class TelescopeStatusHub {
         lastInitialized = snap.initialized || snap.azAltCalibrated();
         initRunningSeen = snap.isAutoInitRunning();
         initNotified = false;
+        lastFinishedInitId = snap.finishedAutoInitAfterFocusId();
         lastInitOk = snap.isAutoInitFinishedOk();
         lastOnMains = snap.isOnMainsPower();
         lastOffMains = snap.isOffMainsPower();
@@ -200,20 +204,26 @@ final class TelescopeStatusHub {
         storageInternalHighLatched = false;
         baselineReady = true;
         Log.i(TAG, "baseline obs=" + lastObs + " init=" + lastInitialized
+                + " finishedInit=" + lastFinishedInitId
                 + " storage=" + lastStoragePercent);
     }
 
     private void diffSnapshotLocked(VesperaStatusSnapshot snap, List<TelescopeStatusEvent> events) {
         boolean ready = snap.initialized || snap.azAltCalibrated();
         boolean initRunning = snap.isAutoInitRunning();
+        String finishedInitId = snap.finishedAutoInitAfterFocusId();
         if (initRunning && !initRunningSeen) initNotified = false;
-        boolean initJustFinished = initRunningSeen && !initRunning
-                && snap.autoInitFailure(false).isEmpty();
-        if (!initNotified && ((ready && !lastInitialized) || initJustFinished)) {
+        // Motor calibration happens at SEEK_STOP, near the start. Notify only
+        // when AUTO_INIT has stopped and autofocus is already in the result.
+        boolean initJustFinished = !initRunning
+                && !finishedInitId.isEmpty()
+                && !finishedInitId.equals(lastFinishedInitId);
+        if (!initNotified && initJustFinished) {
             events.add(TelescopeStatusEvent.of(TelescopeStatusEvent.Kind.INITIALIZED, snap));
             initNotified = true;
         }
-        if (!initRunning && !ready && !initJustFinished) initNotified = false;
+        if (!initRunning && finishedInitId.isEmpty() && !initJustFinished) initNotified = false;
+        if (!finishedInitId.isEmpty()) lastFinishedInitId = finishedInitId;
         lastInitialized = ready;
         initRunningSeen = initRunning;
         lastInitOk = snap.isAutoInitFinishedOk();

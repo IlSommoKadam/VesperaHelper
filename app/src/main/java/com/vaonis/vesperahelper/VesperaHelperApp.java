@@ -20,5 +20,6 @@ public final class VesperaHelperApp extends Application {
             else System.exit(10);
         });
         PhotoSyncService.ensure(this);
+        RemoteBridge.ensure(this);
     }
 }

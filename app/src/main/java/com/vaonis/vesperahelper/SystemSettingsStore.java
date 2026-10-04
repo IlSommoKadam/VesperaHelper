@@ -40,7 +40,7 @@ final class SystemSettingsStore {
     static final String SUN_RESULT_SHUTDOWN_FAIL = "shutdown_fail";
     /** Morning window elapsed without a completed morning sync (no further retries today). */
     static final String SUN_RESULT_WINDOW_CLOSED = "window_closed";
-    /** Morning sync completed (telescope shutdown is event-driven separately). */
+    /** Morning sync completed and telescope shutdown was not requested. */
     static final String SUN_RESULT_SYNC_OK = "sync_ok";
 
     /** Incomplete today's morning attempt: retry instead of waiting until tomorrow. */

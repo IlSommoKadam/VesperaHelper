@@ -9,6 +9,7 @@
 #   - eth-status / eth-dhcp / eth-static: Ethernet Internet (DHCP or manual IP)
 #   - keep VesperaHelper FGS alive after crash / force-stop / swipe-away (resume photo sync)
 #   - list-disks / mount-disk / umount-disk / disk-status / ensure-bind  (USB HD)
+#   - sniff-on / sniff-off: redirect Singularity → 10.0.0.1:8082/8083 only
 #
 # Start once after boot (adb root):
 #   adb push tools/vespera-netd.sh /data/local/tmp/vespera-netd.sh
@@ -36,6 +37,9 @@ PROBE_REQ="$REQ_DIR/probe.req"
 PROBE_ACK="$REQ_DIR/probe.ack"
 ETH_REQ="$REQ_DIR/eth.req"
 ETH_ACK="$REQ_DIR/eth.ack"
+SNIFF_REQ="$REQ_DIR/sniff.req"
+SNIFF_ACK="$REQ_DIR/sniff.ack"
+SNIFF_STATE="/data/local/tmp/vespera-sniff.state"
 HD_MOUNT="/mnt/vespera-hd"
 HD_STATE="/data/local/tmp/vespera-hd.state"
 HD_USB_STATE="/data/local/tmp/vespera-hd-usb"
@@ -80,6 +84,154 @@ write_eth_ack() {
 write_singularity_ack() {
   echo "$1" > "$SINGULARITY_ACK"
   publish_file "$SINGULARITY_ACK"
+}
+
+write_sniff_ack() {
+  echo "$1" > "$SNIFF_ACK"
+  publish_file "$SNIFF_ACK"
+}
+
+# Prefer legacy iptables: nft wrappers on Android often lack owner/REDIRECT.
+sniff_ipt() {
+  if [ -z "$SNIFF_IPT" ]; then
+    if [ -x /system/bin/iptables-legacy ] \
+        && /system/bin/iptables-legacy -t nat -L OUTPUT >/dev/null 2>&1; then
+      SNIFF_IPT=/system/bin/iptables-legacy
+    elif command -v iptables >/dev/null 2>&1 \
+        && iptables -t nat -L OUTPUT >/dev/null 2>&1; then
+      SNIFF_IPT=iptables
+    elif [ -x /system/bin/iptables ] \
+        && /system/bin/iptables -t nat -L OUTPUT >/dev/null 2>&1; then
+      SNIFF_IPT=/system/bin/iptables
+    else
+      return 127
+    fi
+  fi
+  "$SNIFF_IPT" "$@"
+}
+
+singularity_uid() {
+  uid=$(dumpsys package "$SINGULARITY_PKG" 2>/dev/null \
+    | sed -n 's/.*userId=\([0-9][0-9]*\).*/\1/p' | head -n 1)
+  if [ -z "$uid" ]; then
+    uid=$(cmd package list packages -U "$SINGULARITY_PKG" 2>/dev/null \
+      | sed -n 's/.*uid:\([0-9][0-9]*\).*/\1/p' | head -n 1)
+  fi
+  echo "$uid"
+}
+
+sniff_add_redirect() {
+  uid="$1"
+  dport="$2"
+  toport="$3"
+  if sniff_ipt -t nat -C OUTPUT -p tcp -d 10.0.0.1 --dport "$dport" \
+      -m owner --uid-owner "$uid" -j REDIRECT --to-ports "$toport" 2>/dev/null; then
+    return 0
+  fi
+  if sniff_ipt -t nat -I OUTPUT 1 -p tcp -d 10.0.0.1 --dport "$dport" \
+      -m owner --uid-owner "$uid" -j REDIRECT --to-ports "$toport" 2>/dev/null; then
+    return 0
+  fi
+  if sniff_ipt -t nat -C OUTPUT -p tcp -d 10.0.0.1 --dport "$dport" \
+      -m owner --uid-owner "$uid" -j DNAT --to-destination "127.0.0.1:$toport" 2>/dev/null; then
+    return 0
+  fi
+  sniff_ipt -t nat -I OUTPUT 1 -p tcp -d 10.0.0.1 --dport "$dport" \
+    -m owner --uid-owner "$uid" -j DNAT --to-destination "127.0.0.1:$toport"
+}
+
+sniff_del_redirect() {
+  uid="$1"
+  dport="$2"
+  toport="$3"
+  [ -n "$uid" ] && [ -n "$dport" ] && [ -n "$toport" ] || return 0
+  while sniff_ipt -t nat -D OUTPUT -p tcp -d 10.0.0.1 --dport "$dport" \
+      -m owner --uid-owner "$uid" -j REDIRECT --to-ports "$toport" 2>/dev/null; do
+    :
+  done
+  while sniff_ipt -t nat -D OUTPUT -p tcp -d 10.0.0.1 --dport "$dport" \
+      -m owner --uid-owner "$uid" -j DNAT --to-destination "127.0.0.1:$toport" 2>/dev/null; do
+    :
+  done
+}
+
+sniff_off() {
+  if [ -f "$SNIFF_STATE" ]; then
+    uid=$(grep '^UID=' "$SNIFF_STATE" | cut -d= -f2)
+    rest=$(grep '^REST=' "$SNIFF_STATE" | cut -d= -f2)
+    io=$(grep '^IO=' "$SNIFF_STATE" | cut -d= -f2)
+    sniff_del_redirect "$uid" 8082 "$rest"
+    sniff_del_redirect "$uid" 8083 "$io"
+    rm -f "$SNIFF_STATE"
+  fi
+  SNIFF_MISS=0
+}
+
+sniff_port_ok() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$1" -ge 1024 ] && [ "$1" -le 65535 ]
+}
+
+# Only Singularity's TCP toward the telescope API. Cloud and other apps stay direct.
+sniff_on() {
+  rest="$1"
+  io="$2"
+  if ! sniff_port_ok "$rest" || ! sniff_port_ok "$io"; then
+    write_sniff_ack "sniff-err bad-port $(date)"
+    return 1
+  fi
+  uid=$(singularity_uid)
+  if [ -z "$uid" ]; then
+    write_sniff_ack "sniff-err no-uid $(date)"
+    return 1
+  fi
+  if ! sniff_ipt -t nat -L OUTPUT >/dev/null 2>&1; then
+    write_sniff_ack "sniff-err no-iptables $(date)"
+    return 1
+  fi
+  sniff_off
+  printf 'UID=%s\nREST=%s\nIO=%s\n' "$uid" "$rest" "$io" > "$SNIFF_STATE"
+  if ! sniff_add_redirect "$uid" 8082 "$rest" || ! sniff_add_redirect "$uid" 8083 "$io"; then
+    sniff_off
+    write_sniff_ack "sniff-err iptables $(date)"
+    return 1
+  fi
+  echo "sniff-on uid=$uid rest=$rest io=$io $(date)" >&2
+  write_sniff_ack "sniff-on uid=$uid $(date)"
+}
+
+sniff_proxy_up() {
+  port="$1"
+  hex=$(printf '%04X' "$port" 2>/dev/null)
+  if [ -n "$hex" ] && grep -qi ":${hex} " /proc/net/tcp 2>/dev/null; then
+    return 0
+  fi
+  if [ -n "$hex" ] && grep -qi ":${hex} " /proc/net/tcp6 2>/dev/null; then
+    return 0
+  fi
+  ss -ltn 2>/dev/null | grep -qE ":${port}([^0-9]|$)" && return 0
+  netstat -ltn 2>/dev/null | grep -qE ":${port}([^0-9]|$)"
+}
+
+sniff_guard() {
+  [ -f "$SNIFF_STATE" ] || return 0
+  now=$(date +%s 2>/dev/null)
+  [ -n "$now" ] && [ -n "$SNIFF_GUARD_AT" ] && [ $((now - SNIFF_GUARD_AT)) -lt 2 ] && return 0
+  SNIFF_GUARD_AT=$now
+  rest=$(grep '^REST=' "$SNIFF_STATE" | cut -d= -f2)
+  io=$(grep '^IO=' "$SNIFF_STATE" | cut -d= -f2)
+  if sniff_proxy_up "$rest" && sniff_proxy_up "$io"; then
+    SNIFF_MISS=0
+    return 0
+  fi
+  SNIFF_MISS=$((SNIFF_MISS + 1))
+  if [ "$SNIFF_MISS" -ge 5 ]; then
+    echo "sniff proxy down, removing redirect $(date)" >&2
+    sniff_off
+    write_sniff_ack "sniff-off proxy-down $(date)"
+  fi
 }
 
 apply_route() {
@@ -1406,6 +1558,11 @@ handle_cmd() {
       write_ack "singularity-start-ok $(date)"
       ;;
     check-singularity) check_singularity ;;
+    sniff-on) sniff_on "$a" "$b" ;;
+    sniff-off)
+      sniff_off
+      write_sniff_ack "sniff-off $(date)"
+      ;;
     probe-api) probe_api ;;
     list-disks) list_disks ;;
     mount-disk) mount_disk "$a" ;;
@@ -1551,15 +1708,28 @@ consume_req() {
 # TERM is used when reloading the daemon. Never umount the HD here.
 on_term() {
   echo "vespera-netd stopping $(date)" >&2
+  if [ -f "$SNIFF_STATE" ]; then
+    sniff_off
+    write_sniff_ack "sniff-off daemon-stop $(date)"
+  fi
   exit 0
 }
 trap on_term TERM INT
 
+# A reload must not leave Singularity pointed at a dead local proxy.
+if [ -f "$SNIFF_STATE" ]; then
+  sniff_off
+  write_sniff_ack "sniff-off daemon-start $(date)"
+fi
+SNIFF_MISS=0
+SNIFF_GUARD_AT=0
 WATCH=0
 USB_WATCH=0
 ETH_WATCH=0
 while true; do
   handled=0
+  consume_req "$SNIFF_REQ" && handled=1
+  sniff_guard
   # Disk ops have their own file so route/promote/check-singularity cannot steal them.
   consume_req "$DISK_REQ" && handled=1
   consume_req "$PROBE_REQ" && handled=1

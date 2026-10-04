@@ -450,6 +450,63 @@ final class VesperaCommandClient {
     }
 
     /**
+     * Starts a catalog observation. {@code storedCapture} posts the multi-night
+     * resume API; otherwise {@code /v1/general/startObservation}. Initializes
+     * first when the arm is not ready. Mosaic parameters are not sent.
+     */
+    static Result observe(String host, int apiPort, Network network,
+            VesperaLocationClient.Site initSite, String body, boolean storedCapture) {
+        if (host == null || host.isEmpty()) host = "10.0.0.1";
+        int port = apiPort > 0 ? apiPort : 8082;
+        if (port == 8083) port = 8082;
+        if (body == null || body.trim().isEmpty()) {
+            return new Result(false, -1, "no_target");
+        }
+        VesperaStatusClient.Result status = VesperaStatusClient.fetchResult(host, port, network);
+        VesperaStatusSnapshot snap = status.snapshot;
+        if (snap == null) {
+            String detail = status.error.isEmpty() ? "status_unavailable" : status.error;
+            return new Result(false, -1, "status_unavailable: " + detail);
+        }
+        if (!snap.canSignCommands()) {
+            return new Result(false, -1, snap.authMissingCode());
+        }
+        if (!readyToResumeAfterInit(snap)) {
+            Result init = ensureInitialized(host, port, network, snap, initSite);
+            if (!init.success) return init;
+            status = VesperaStatusClient.fetchResult(host, port, network);
+            snap = status.snapshot;
+            if (snap == null || !snap.canSignCommands()) {
+                return new Result(false, -1, "status_unavailable: after_init");
+            }
+            if (snap.isAutoInitRunning()) {
+                return new Result(false, -1, "init_not_ready");
+            }
+        }
+        String authorization = VesperaApiAuth.authorizationHeader(snap);
+        if (authorization.isEmpty()) {
+            return new Result(false, -1, "auth_sign_failed");
+        }
+        String path = storedCapture
+                ? "/v1/captureStore/startObservationFromStoredCapture"
+                : "/v1/general/startObservation";
+        try {
+            Log.i(TAG, "POST observe stored=" + storedCapture + " bytes=" + body.length());
+            VesperaHttp.Response response = VesperaHttp.post(
+                    network, host, port, path, body, authorization, TIMEOUT_MS, false);
+            if (response.code == 401) return new Result(false, 401, "auth_required");
+            boolean ok = response.code >= 200 && response.code < 300
+                    && !isFirmwareFailure(response.body);
+            String msg = response.body.isEmpty()
+                    ? ("HTTP " + response.code) : truncate(response.body, 400);
+            return new Result(ok, response.code, msg);
+        } catch (Exception failure) {
+            Log.w(TAG, path + ": " + failure.getMessage());
+            return new Result(false, -1, failure.getMessage());
+        }
+    }
+
+    /**
      * Poll variant with an explicit timeout and poll interval. Used by weather
      * protection, which needs a shorter close/retract confirmation window than
      * the morning shutdown.

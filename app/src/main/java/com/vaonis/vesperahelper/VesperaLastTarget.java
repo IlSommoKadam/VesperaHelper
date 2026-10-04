@@ -113,6 +113,16 @@ final class VesperaLastTarget {
         return label == null ? "" : label;
     }
 
+    /** Last remembered RA/Dec in degrees, or null. RA may be negative. */
+    static double[] raDec() {
+        if (!hasTarget()) return null;
+        try {
+            return raDecOf(new JSONObject(bodyJson));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     static String formatCoordinates(JSONObject target) {
         double[] pair = raDecOf(target);
         if (pair == null) return "";

@@ -53,6 +53,7 @@ public final class VesperaConnectionService extends Service {
     private static final String DISK_REQ = "disk.req";
     private static final String PROBE_REQ = "probe.req";
     private static final String ETH_REQ = "eth.req";
+    private static final String SNIFF_REQ = "sniff.req";
 
     private static final long SINGULARITY_START_DELAY_MS = 3_000;
 
@@ -220,6 +221,11 @@ public final class VesperaConnectionService extends Service {
     /** Dedicated request so route/promote cannot steal API port discovery. */
     public static boolean writeProbeRequest(Context context, String line) {
         return writeRequestFile(context, PROBE_REQ, line);
+    }
+
+    /** Ask the daemon to redirect Singularity's telescope API through the local sniffer. */
+    public static boolean writeSniffRequest(Context context, String line) {
+        return writeRequestFile(context, SNIFF_REQ, line);
     }
 
     /** Re-scan active networks and adopt the saved Vespera if present. */
