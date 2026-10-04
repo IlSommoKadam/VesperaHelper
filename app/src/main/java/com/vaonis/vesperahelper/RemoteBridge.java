@@ -170,7 +170,7 @@ public final class RemoteBridge {
             case "sync":
                 return cmdSync(action);
             case "telescope":
-                return cmdTelescope(action);
+                return cmdTelescope(action, p);
             default:
                 return "ERR|cmd|unknown|" + domain;
         }
@@ -321,7 +321,37 @@ public final class RemoteBridge {
         return "ERR|sync|unknown|" + action;
     }
 
-    private String cmdTelescope(String action) {
+    private String cmdTelescope(String action, String[] p) {
+        if ("observe".equals(action) || "observeresume".equals(action)) {
+            boolean resume = "observeresume".equals(action);
+            String payload = joinFrom(p, 3).trim();
+            if (payload.isEmpty()) {
+                return "ERR|telescope|" + action + "|missing_body";
+            }
+            String body;
+            if (resume) {
+                try {
+                    // storeId sola oppure JSON {"storeId":"..."}.
+                    if (payload.startsWith("{")) {
+                        body = payload;
+                    } else {
+                        body = new JSONObject().put("storeId", payload).toString();
+                    }
+                } catch (Exception e) {
+                    return "ERR|telescope|observeResume|" + safe(e.getMessage());
+                }
+            } else {
+                body = payload;
+            }
+            Network network = VesperaConnectionService.getActiveNetwork();
+            int port = InstrumentWatchdog.lastApiPort();
+            if (port <= 0) port = 8082;
+            VesperaLocationClient.Site site = VesperaLocationClient.fetch(network);
+            VesperaCommandClient.Result result = VesperaCommandClient.observe(
+                    "10.0.0.1", port, network, site, body, resume);
+            return (result.success ? "OK" : "ERR")
+                    + "|telescope|" + action + "|" + result.httpCode + "|" + safe(result.message);
+        }
         VesperaCommandClient.Command command;
         switch (action) {
             case "park":
