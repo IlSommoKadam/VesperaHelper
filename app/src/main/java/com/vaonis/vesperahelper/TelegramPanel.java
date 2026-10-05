@@ -20,7 +20,7 @@ import java.util.Date;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Tab Notifiche: bot Telegram, chat ID, checkbox eventi, Salva e prova. */
+/** Tab Notifiche: bot Telegram, chat ID, interruttore unico, Salva e prova. */
 final class TelegramPanel {
     private final Activity activity;
     private final float density;
@@ -28,20 +28,7 @@ final class TelegramPanel {
     private final FixedScrollView scroll;
     private final EditText tokenInput;
     private final EditText chatInput;
-    private final Row initialized;
-    private final Row shutdown;
-    private final Row batteryOffMains;
-    private final Row hdHigh;
-    private final Row connected;
-    private final Row obsStopped;
-    private final Row obsStarted;
-    private final Row error;
-    private final Row lost;
-    private final Row obsFinished;
-    private final Row sunTooHigh;
-    private final Row batteryLow;
-    private final Row storageInternalHigh;
-    private final Row rainForecast;
+    private final CheckBox enableCheck;
     private final TextView saveResult;
     private final TextView lastStatus;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -80,30 +67,20 @@ final class TelegramPanel {
         chatInput.setText(snap.chatId);
 
         LinearLayout events = addGroup(layout, R.string.telegram_section_events, 0);
-        initialized = addRow(events, activity.getString(R.string.telegram_ev_initialized),
-                snap.initialized);
-        shutdown = addRow(events, activity.getString(R.string.telegram_ev_shutdown), snap.shutdown);
-        batteryOffMains = addRow(events, activity.getString(R.string.telegram_ev_battery),
-                snap.batteryOffMains);
-        hdHigh = addRow(events, activity.getString(R.string.telegram_ev_hd), snap.hdHigh);
-        connected = addRow(events, activity.getString(R.string.telegram_ev_connected), snap.connected);
-        obsStopped = addRow(events, activity.getString(R.string.telegram_ev_obs_stopped),
-                snap.obsStopped);
-        obsStarted = addRow(events, activity.getString(R.string.telegram_ev_obs_started),
-                snap.obsStarted);
-        error = addRow(events, activity.getString(R.string.telegram_ev_error), snap.error);
-
-        LinearLayout extra = addGroup(layout, R.string.telegram_section_extra, 0);
-        lost = addRow(extra, activity.getString(R.string.telegram_ev_lost), snap.lost);
-        obsFinished = addRow(extra, activity.getString(R.string.telegram_ev_obs_finished),
-                snap.obsFinished);
-        sunTooHigh = addRow(extra, activity.getString(R.string.telegram_ev_sun), snap.sunTooHigh);
-        batteryLow = addRow(extra, activity.getString(R.string.telegram_ev_battery_low),
-                snap.batteryLow);
-        storageInternalHigh = addRow(extra, activity.getString(R.string.telegram_ev_storage),
-                snap.storageInternalHigh);
-        rainForecast = addRow(extra, activity.getString(R.string.telegram_ev_rain),
-                snap.rainForecast);
+        enableCheck = new CheckBox(activity);
+        enableCheck.setText(R.string.telegram_enable_all);
+        enableCheck.setChecked(snap.anyEnabled());
+        enableCheck.setFocusable(false);
+        enableCheck.setFocusableInTouchMode(false);
+        enableCheck.setTextSize(15);
+        enableCheck.setTypeface(enableCheck.getTypeface(), Typeface.BOLD);
+        enableCheck.setTextColor(0xFF1A237E);
+        enableCheck.setPadding(0, 0, 0, (int) (2 * density));
+        events.addView(enableCheck);
+        TextView hint = body(activity.getString(R.string.telegram_enable_hint));
+        hint.setTextSize(12);
+        hint.setTextColor(0xFF607D8B);
+        events.addView(hint);
 
         Button save = new Button(activity);
         save.setAllCaps(true);
@@ -160,40 +137,14 @@ final class TelegramPanel {
         TelegramSettingsStore.Snapshot snap = settings.snapshot();
         if (tokenInput.getText().toString().isEmpty()) tokenInput.setText(snap.token);
         if (chatInput.getText().toString().isEmpty()) chatInput.setText(snap.chatId);
-        initialized.check.setChecked(snap.initialized);
-        shutdown.check.setChecked(snap.shutdown);
-        batteryOffMains.check.setChecked(snap.batteryOffMains);
-        hdHigh.check.setChecked(snap.hdHigh);
-        connected.check.setChecked(snap.connected);
-        obsStopped.check.setChecked(snap.obsStopped);
-        obsStarted.check.setChecked(snap.obsStarted);
-        error.check.setChecked(snap.error);
-        lost.check.setChecked(snap.lost);
-        obsFinished.check.setChecked(snap.obsFinished);
-        sunTooHigh.check.setChecked(snap.sunTooHigh);
-        batteryLow.check.setChecked(snap.batteryLow);
-        storageInternalHigh.check.setChecked(snap.storageInternalHigh);
-        rainForecast.check.setChecked(snap.rainForecast);
+        enableCheck.setChecked(snap.anyEnabled());
     }
 
     private TelegramSettingsStore.Snapshot collect() {
         TelegramSettingsStore.Snapshot snap = new TelegramSettingsStore.Snapshot();
         snap.token = tokenInput.getText().toString().trim();
         snap.chatId = chatInput.getText().toString().trim();
-        snap.initialized = initialized.check.isChecked();
-        snap.shutdown = shutdown.check.isChecked();
-        snap.batteryOffMains = batteryOffMains.check.isChecked();
-        snap.hdHigh = hdHigh.check.isChecked();
-        snap.connected = connected.check.isChecked();
-        snap.obsStopped = obsStopped.check.isChecked();
-        snap.obsStarted = obsStarted.check.isChecked();
-        snap.error = error.check.isChecked();
-        snap.lost = lost.check.isChecked();
-        snap.obsFinished = obsFinished.check.isChecked();
-        snap.sunTooHigh = sunTooHigh.check.isChecked();
-        snap.batteryLow = batteryLow.check.isChecked();
-        snap.storageInternalHigh = storageInternalHigh.check.isChecked();
-        snap.rainForecast = rainForecast.check.isChecked();
+        snap.setAllEvents(enableCheck.isChecked());
         return snap;
     }
 
@@ -291,40 +242,6 @@ final class TelegramPanel {
         return box;
     }
 
-    private Row addRow(LinearLayout group, String title, boolean checked) {
-        if (countCheckRows(group) > 0) group.addView(rowDivider());
-        CheckBox check = new CheckBox(activity);
-        check.setText(title);
-        check.setChecked(checked);
-        check.setFocusable(false);
-        check.setFocusableInTouchMode(false);
-        check.setTextSize(15);
-        check.setTypeface(check.getTypeface(), Typeface.BOLD);
-        check.setTextColor(0xFF1A237E);
-        check.setPadding(0, 0, 0, (int) (2 * density));
-        group.addView(check);
-        return new Row(check);
-    }
-
-    private int countCheckRows(LinearLayout group) {
-        int n = 0;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            if (group.getChildAt(i) instanceof CheckBox) n++;
-        }
-        return n;
-    }
-
-    private View rowDivider() {
-        View divider = new View(activity);
-        divider.setBackgroundColor(0xFFB0BEC5);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(1 * density)));
-        lp.topMargin = (int) (6 * density);
-        lp.bottomMargin = (int) (6 * density);
-        divider.setLayoutParams(lp);
-        return divider;
-    }
-
     private TextView section(String text) {
         TextView view = new TextView(activity);
         view.setText(text);
@@ -359,13 +276,5 @@ final class TelegramPanel {
         view.setText(text);
         view.setPadding(0, (int) (2 * density), 0, (int) (6 * density));
         return view;
-    }
-
-    private static final class Row {
-        final CheckBox check;
-
-        Row(CheckBox check) {
-            this.check = check;
-        }
     }
 }

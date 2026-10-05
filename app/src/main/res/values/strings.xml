@@ -670,13 +670,15 @@
     <string name="system_weather_log_protect">Protezione meteo</string>
 
     <string name="telegram_tab_title">Notifiche Telegram</string>
-    <string name="telegram_tab_intro">Crea un bot con @BotFather, copia il token, scrivi /start al bot e ottieni il chat ID (es. @userinfobot). Serve internet (Ethernet, VPN o LTE), non solo il Wi‑Fi Vespera. Salva e scegli gli eventi. Un messaggio per transizione, controllo ogni 2 minuti.</string>
+    <string name="telegram_tab_intro">Crea un bot con @BotFather, copia il token, scrivi /start al bot e ottieni il chat ID. Serve internet (Ethernet, VPN o LTE), non solo il Wi‑Fi Vespera. Un interruttore accende o spegne tutte le notifiche.</string>
     <string name="telegram_section_bot">Bot</string>
     <string name="telegram_token_label">Token bot</string>
     <string name="telegram_token_hint">123456:ABC…</string>
     <string name="telegram_chat_label">Chat ID</string>
     <string name="telegram_chat_hint">123456789 o -100…</string>
     <string name="telegram_section_events">Eventi</string>
+    <string name="telegram_enable_all">Notifiche Telegram</string>
+    <string name="telegram_enable_hint">Accende o spegne tutti gli avvisi (osservazione, batteria, sole, pioggia, ecc.).</string>
     <string name="telegram_section_extra">Altri eventi</string>
     <string name="telegram_ev_initialized">Inizializzazione completata (dopo la messa a fuoco)</string>
     <string name="telegram_ev_shutdown">Spegnimento telescopio</string>

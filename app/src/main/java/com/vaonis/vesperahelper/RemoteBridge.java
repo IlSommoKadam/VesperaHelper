@@ -377,25 +377,28 @@ public final class RemoteBridge {
         snap.sunPiShutdown = o.optBoolean("sunPiShutdown", snap.sunPiShutdown);
         store.save(snap);
     }
-
     private void applyTelegramJson(JSONObject o) {
         TelegramSettingsStore store = TelegramSettingsStore.from(app);
         TelegramSettingsStore.Snapshot snap = store.snapshot();
         if (o.has("token")) snap.token = o.optString("token", snap.token);
         if (o.has("chatId")) snap.chatId = o.optString("chatId", snap.chatId);
-        snap.initialized = o.optBoolean("initialized", snap.initialized);
-        snap.shutdown = o.optBoolean("shutdown", snap.shutdown);
-        snap.batteryOffMains = o.optBoolean("batteryOffMains", snap.batteryOffMains);
-        snap.hdHigh = o.optBoolean("hdHigh", snap.hdHigh);
-        snap.connected = o.optBoolean("connected", snap.connected);
-        snap.obsStopped = o.optBoolean("obsStopped", snap.obsStopped);
-        snap.obsStarted = o.optBoolean("obsStarted", snap.obsStarted);
-        snap.error = o.optBoolean("error", snap.error);
-        snap.lost = o.optBoolean("lost", snap.lost);
-        snap.obsFinished = o.optBoolean("obsFinished", snap.obsFinished);
-        snap.sunTooHigh = o.optBoolean("sunTooHigh", snap.sunTooHigh);
-        snap.batteryLow = o.optBoolean("batteryLow", snap.batteryLow);
-        snap.storageInternalHigh = o.optBoolean("storageInternalHigh", snap.storageInternalHigh);
+        if (o.has("enabled")) {
+            snap.setAllEvents(o.optBoolean("enabled"));
+        }
+        if (o.has("initialized")) snap.initialized = o.optBoolean("initialized");
+        if (o.has("shutdown")) snap.shutdown = o.optBoolean("shutdown");
+        if (o.has("batteryOffMains")) snap.batteryOffMains = o.optBoolean("batteryOffMains");
+        if (o.has("hdHigh")) snap.hdHigh = o.optBoolean("hdHigh");
+        if (o.has("connected")) snap.connected = o.optBoolean("connected");
+        if (o.has("obsStopped")) snap.obsStopped = o.optBoolean("obsStopped");
+        if (o.has("obsStarted")) snap.obsStarted = o.optBoolean("obsStarted");
+        if (o.has("error")) snap.error = o.optBoolean("error");
+        if (o.has("lost")) snap.lost = o.optBoolean("lost");
+        if (o.has("obsFinished")) snap.obsFinished = o.optBoolean("obsFinished");
+        if (o.has("sunTooHigh")) snap.sunTooHigh = o.optBoolean("sunTooHigh");
+        if (o.has("batteryLow")) snap.batteryLow = o.optBoolean("batteryLow");
+        if (o.has("storageInternalHigh")) snap.storageInternalHigh = o.optBoolean("storageInternalHigh");
+        if (o.has("rainForecast")) snap.rainForecast = o.optBoolean("rainForecast");
         store.save(snap);
     }
 
@@ -564,6 +567,7 @@ public final class RemoteBridge {
         o.put("configured", store.configured());
         o.put("token", maskToken ? (s.token.isEmpty() ? "" : "***") : s.token);
         o.put("chatId", s.chatId);
+        o.put("enabled", s.anyEnabled());
         o.put("initialized", s.initialized);
         o.put("shutdown", s.shutdown);
         o.put("batteryOffMains", s.batteryOffMains);
@@ -577,6 +581,7 @@ public final class RemoteBridge {
         o.put("sunTooHigh", s.sunTooHigh);
         o.put("batteryLow", s.batteryLow);
         o.put("storageInternalHigh", s.storageInternalHigh);
+        o.put("rainForecast", s.rainForecast);
         o.put("lastOkAt", store.lastOkAt());
         o.put("lastError", store.lastError());
         return o;

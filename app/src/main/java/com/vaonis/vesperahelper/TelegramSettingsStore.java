@@ -28,6 +28,28 @@ final class TelegramSettingsStore {
         boolean batteryLow = true;
         boolean storageInternalHigh = false;
         boolean rainForecast = true;
+        void setAllEvents(boolean on) {
+            initialized = on;
+            shutdown = on;
+            batteryOffMains = on;
+            hdHigh = on;
+            connected = on;
+            obsStopped = on;
+            obsStarted = on;
+            error = on;
+            lost = on;
+            obsFinished = on;
+            sunTooHigh = on;
+            batteryLow = on;
+            storageInternalHigh = on;
+            rainForecast = on;
+        }
+
+        boolean anyEnabled() {
+            return initialized || shutdown || batteryOffMains || hdHigh || connected
+                    || obsStopped || obsStarted || error || lost || obsFinished
+                    || sunTooHigh || batteryLow || storageInternalHigh || rainForecast;
+        }
     }
 
     private final SharedPreferences prefs;
