@@ -353,12 +353,23 @@ public final class RemoteBridge {
 
     /** Osservazione da catalogo inviata dai client (multi-notte nuova o ripresa). */
     private String cmdObserve(boolean resume, String[] p) {
-        if (p.length < 4) return "ERR|telescope|missing_arg";
+        String payload = p.length >= 4 ? joinFrom(p, 3).trim() : "";
+        if (payload.isEmpty()) return "ERR|telescope|missing_arg";
         String body;
         if (resume) {
-            body = SkyCatalog.resumeBody(new SkyCatalog.Session(p[3].trim(), "", 0));
+            // storeId sola oppure JSON {"storeId":"..."}.
+            String storeId = payload;
+            if (payload.startsWith("{")) {
+                try {
+                    storeId = new JSONObject(payload).optString("storeId", "").trim();
+                } catch (Exception e) {
+                    return "ERR|telescope|observeResume|" + safe(e.getMessage());
+                }
+                if (storeId.isEmpty()) return "ERR|telescope|missing_arg";
+            }
+            body = SkyCatalog.resumeBody(new SkyCatalog.Session(storeId, "", 0));
         } else {
-            body = joinFrom(p, 3);
+            body = payload;
         }
         Network network = VesperaConnectionService.getActiveNetwork();
         int port = InstrumentWatchdog.lastApiPort();
