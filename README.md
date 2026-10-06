@@ -108,6 +108,8 @@ L'app mantiene una richiesta Wi-Fi generica e chiede al daemon root `tools/vespe
 | 0.8.15 | 173 | Meteo: il traffico Internet esce da Ethernet (regola 96), non dal Wiâ€‘Fi Vespera |
 | 0.8.16 | 174 | Meteo: DNS Android allineato a eth static (niente .1 morto) + DoH prima del DNS di sistema lento |
 | 0.8.17 | 175 | Sync mattutina separata dallo spegnimento: telescopio/Pi solo se observation/plan terminati con GENERAL.SUN_TOO_HIGH (no init/orologio) |
+| 0.8.38 | 196 | RemoteBridge: check Singularity in background per i client remoti |
+| 0.8.39 | 197 | RemoteBridge: `observeResume` accetta anche JSON `{"storeId":"..."}` (PR #6) |
 
 Il daemon deve essere avviato come root sul Pi dopo il boot; l'app comunica con esso tramite `net.req` / `disk.req` nella propria directory esterna. Comandi Ethernet su `net.req`: `eth-status`, `eth-dhcp`, `eth-static|ip|prefix|gw|dns1|dns2` (ack su `net.ack`).
 
