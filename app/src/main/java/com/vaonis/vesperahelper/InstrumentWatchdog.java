@@ -61,6 +61,7 @@ final class InstrumentWatchdog {
     private final AtomicBoolean checkInFlight = new AtomicBoolean(false);
     private final AtomicBoolean restartInFlight = new AtomicBoolean(false);
     private static volatile Snapshot lastSnapshot;
+    private static volatile long lastSnapshotAt;
 
     static final class Snapshot {
         final boolean detected;
@@ -93,7 +94,26 @@ final class InstrumentWatchdog {
 
     static void clearSnapshot() {
         lastSnapshot = null;
+        lastSnapshotAt = 0;
         lastApiPort = -1;
+    }
+
+    /** Age of the last check result in ms (Long.MAX_VALUE if never checked). */
+    static long snapshotAgeMs() {
+        long at = lastSnapshotAt;
+        return at == 0 ? Long.MAX_VALUE : android.os.SystemClock.elapsedRealtime() - at;
+    }
+
+    /**
+     * Records a check run outside the activity (RemoteBridge), so remote clients
+     * see a real status while Singularity — not VesperaHelper — is in the foreground.
+     */
+    static void recordBackgroundCheck(SingularityDetector.Result result) {
+        if (result == null) return;
+        rememberPort(parsePort(result.detail));
+        lastSnapshot = new Snapshot(result.isConnected(), lastApiPort, result.detail,
+                result.status.name());
+        lastSnapshotAt = android.os.SystemClock.elapsedRealtime();
     }
 
     static void rememberPort(int port) {
@@ -344,6 +364,7 @@ final class InstrumentWatchdog {
                 && previous.detected == detected
                 && previous.port == port
                 && previous.status.equals(status == null ? STATUS_IDLE : status)) {
+            lastSnapshotAt = android.os.SystemClock.elapsedRealtime();
             return;
         }
         emit(detected, port, message, manual, status);
@@ -357,6 +378,7 @@ final class InstrumentWatchdog {
         if (port <= 0) port = lastApiPort;
         lastSnapshot = new Snapshot(detected, port, localizedMessage,
                 status == null ? STATUS_IDLE : status);
+        lastSnapshotAt = android.os.SystemClock.elapsedRealtime();
         Intent intent = new Intent(ACTION_STATUS)
                 .setPackage(appContext.getPackageName())
                 .putExtra(EXTRA_DETECTED, detected)

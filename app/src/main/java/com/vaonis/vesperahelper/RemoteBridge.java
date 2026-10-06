@@ -41,6 +41,10 @@ public final class RemoteBridge {
     private static final AtomicBoolean STORAGE_BUSY = new AtomicBoolean(false);
     private long lastStorageProbeAt;
 
+    private static final java.util.concurrent.ExecutorService SING_WORKER =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final AtomicBoolean SING_BUSY = new AtomicBoolean(false);
+
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
 
     private final Context app;
@@ -262,6 +266,7 @@ public final class RemoteBridge {
         }
         if ("check".equals(action)) {
             SingularityDetector.Result r = SingularityDetector.check(app);
+            InstrumentWatchdog.recordBackgroundCheck(r);
             return "OK|singularity|check|" + r.status.name() + "|" + safe(r.detail);
         }
         return "ERR|singularity|unknown|" + action;
@@ -540,10 +545,39 @@ public final class RemoteBridge {
         return o;
     }
 
+    /**
+     * The activity watchdog only runs while VesperaHelper is in the foreground; on the Pi
+     * Singularity usually is, so the bridge refreshes the check itself for remote clients.
+     */
+    private void refreshSingularityIfStale() {
+        if (!VesperaConnectionService.STATUS_CONNECTED.equals(VesperaConnectionService.getLastStatus())) {
+            return;
+        }
+        if (InstrumentWatchdog.snapshotAgeMs() < InstrumentWatchdog.INTERVAL_MS) return;
+        if (!SING_BUSY.compareAndSet(false, true)) return;
+        SING_WORKER.execute(() -> {
+            try {
+                InstrumentWatchdog.recordBackgroundCheck(SingularityDetector.check(app));
+            } catch (Exception e) {
+                Log.w(TAG, "singularity background check failed", e);
+            } finally {
+                SING_BUSY.set(false);
+            }
+        });
+    }
+
     private JSONObject singularityJson() throws Exception {
         JSONObject o = new JSONObject();
+        boolean wifiConnected = VesperaConnectionService.STATUS_CONNECTED
+                .equals(VesperaConnectionService.getLastStatus());
+        if (wifiConnected) refreshSingularityIfStale();
         InstrumentWatchdog.Snapshot snap = InstrumentWatchdog.lastSnapshot();
-        if (snap == null) {
+        if (wifiConnected && (snap == null || InstrumentWatchdog.STATUS_IDLE.equals(snap.status))) {
+            o.put("detected", false);
+            o.put("status", InstrumentWatchdog.STATUS_CHECKING);
+            o.put("port", -1);
+            o.put("message", "");
+        } else if (snap == null || !wifiConnected) {
             o.put("detected", false);
             o.put("status", "IDLE");
             o.put("port", -1);
