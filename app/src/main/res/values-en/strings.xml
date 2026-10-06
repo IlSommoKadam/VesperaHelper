@@ -226,6 +226,15 @@
     <string name="telescope_observe_fail">Observation did not start: %1$s</string>
     <string name="telescope_observe_need_wifi">Connect the Vespera from the Connections tab before sending.</string>
     <string name="telescope_observe_busy">A command is already running.</string>
+    <string name="telescope_section_plan">Night plan (from Vespera Control)</string>
+    <string name="telescope_plan_none">No plan loaded. Prepare it in Vespera Control: Telescope › Favorites › Night plan › Load on Helper.</string>
+    <string name="telescope_plan_cancel">Cancel plan</string>
+    <string name="telescope_plan_cancel_confirm">Cancel the plan? The telescope will no longer receive the scheduled targets.</string>
+    <string name="telescope_plan_active">active</string>
+    <string name="telescope_plan_done">finished</string>
+    <string name="telescope_plan_steps">Steps (status):</string>
+    <string name="telescope_plan_periods">Periods:</string>
+    <string name="telescope_plan_totals">Observation time per target:</string>
     <string name="telescope_section_sniff">Singularity commands</string>
     <string name="telescope_sniff_hint">Captures only requests Singularity sends to this telescope (ports 8082 and 8083). Vaonis cloud and other apps are not redirected. The Authorization signature is not shown. Stop the capture when finished. Requires an updated vespera-netd.sh on the device.</string>
     <string name="telescope_sniff_start">Capture commands</string>

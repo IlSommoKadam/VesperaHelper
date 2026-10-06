@@ -9,6 +9,15 @@ L'app mantiene una richiesta Wi-Fi generica e chiede al daemon root `tools/vespe
 | Versione | versionCode | Note |
 |----------|-------------|------|
 | 0.8.19 | 177 | RemoteBridge: client Win/Android via ADB (remote.req / remote.ack / remote.state.json) |
+| 0.8.20 | 178 | Interruttore unico per le notifiche Telegram |
+| 0.8.21 | 179 | (build installata sul Pi da altra sessione) |
+| 0.8.22 | 180 | Sniffer Singularity: registro persistente `files/sniff.log` (ruota a 1 MB in `sniff.log.1`) |
+| 0.8.25 | 183 | RemoteBridge: lo stato telescopio include `latitude`/`longitude` della posizione impostata in Sistema (APK/Windows la usano per la visibilità) |
+| 0.8.26 | 184 | RemoteBridge: Init/Riprendi/Osserva usano la posizione inviata dal client (JSON `{"lat","lon"}` dopo l'azione), poi quella di Sistema, API Vespera e status (prima davano `no_site`) |
+| 0.8.27 | 185 | Telescopio: sezione **Piano della notte** con il piano caricato da Vespera Control (passi con stato, periodi con meteo, tempo per oggetto) e **Annulla piano**; lo stato remoto include `lines` e `totals` del piano |
+| 0.8.28 | 186 | Piano della notte: tempo per oggetto e totale divisi per visibilità (ottima/buona/scarsa) anche per piani senza totali dal client |
+| 0.8.29 | 187 | Telegram: "osservazione **avviata** verso …" per una nuova osservazione; "ripresa" solo con Riprendi/Continua multi-notte o STOPPED→RUNNING sullo stesso oggetto (prima ogni RUNNING dopo uno STOPPED era "ripresa") |
+| 0.8.30 | 188 | Piano della notte: visibilità solo dall'altezza (ottima/buona/scarsa/bassa), meteo separato (sereno/poco nuvoloso/nuvoloso/pioggia, nubi medie %); per piani vecchi l'altezza si calcola dai passi con la posizione di Sistema |
 | 0.2.0 | 2 | Label versione in UI; default probe su 8082; scan porte include 21/8082/8083 |
 | 0.2.1 | 3 | A connessione: scan porte automatico, preferisce 8082/8083 e verifica TCP |
 | 0.2.2 | 4 | Auto-discovery ritardata + attesa DHCP + retry se porte ancora chiuse |

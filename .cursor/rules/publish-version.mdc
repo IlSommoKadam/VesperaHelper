@@ -1,0 +1,13 @@
+---
+description: Ad ogni modifica alzare la revisione e installare l'Helper sul Pi
+alwaysApply: true
+---
+
+# Versione e installazione sul Pi
+
+Dopo ogni modifica all'app, prima di chiudere il lavoro:
+
+1. Alza `versionName` di una revisione (es. `0.8.21` -> `0.8.22`) e `versionCode` di 1 in `app/build.gradle`.
+2. Aggiungi la riga corrispondente nella tabella Versioning del `README.md`.
+3. Compila e installa sul Pi (`192.168.1.4:5555`) con `tools\build-install-pi.bat` (richiede `secrets.properties` con le chiavi reali).
+4. Controlla in `tools\build-install-pi.log` che la versione installata sia quella nuova.

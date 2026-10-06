@@ -33,6 +33,13 @@ public final class RemoteBridge {
     private static final String STATE = "remote.state.json";
     private static final long POLL_MS = 400L;
     private static final long STATE_MS = 2_500L;
+    /** Rilettura FTP della memoria interna per i client (10 min; 2 min se mai letta). */
+    private static final long STORAGE_REFRESH_MS = 10 * 60_000L;
+    private static final long STORAGE_RETRY_MS = 2 * 60_000L;
+    private static final java.util.concurrent.ExecutorService STORAGE_WORKER =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final AtomicBoolean STORAGE_BUSY = new AtomicBoolean(false);
+    private long lastStorageProbeAt;
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
 
@@ -54,6 +61,7 @@ public final class RemoteBridge {
         if (!STARTED.compareAndSet(false, true)) return;
         RemoteBridge bridge = new RemoteBridge(context);
         bridge.handler.post(bridge.pollLoop);
+        NightPlanRunner.get(context);
         Log.i(TAG, "RemoteBridge started");
     }
 
@@ -171,6 +179,8 @@ public final class RemoteBridge {
                 return cmdSync(action);
             case "telescope":
                 return cmdTelescope(action, p);
+            case "plan":
+                return cmdPlan(action, p);
             default:
                 return "ERR|cmd|unknown|" + domain;
         }
@@ -321,37 +331,88 @@ public final class RemoteBridge {
         return "ERR|sync|unknown|" + action;
     }
 
-    private String cmdTelescope(String action, String[] p) {
-        if ("observe".equals(action) || "observeresume".equals(action)) {
-            boolean resume = "observeresume".equals(action);
-            String payload = joinFrom(p, 3).trim();
-            if (payload.isEmpty()) {
-                return "ERR|telescope|" + action + "|missing_body";
+    /** Piano notturno: {@code cmd|plan|load|{json}}, {@code cmd|plan|cancel}. */
+    private String cmdPlan(String action, String[] p) {
+        NightPlanRunner runner = NightPlanRunner.get(app);
+        try {
+            if ("load".equals(action)) {
+                if (p.length < 4) return "ERR|plan|missing_json";
+                return runner.load(joinFrom(p, 3));
             }
-            String body;
-            if (resume) {
+            if ("cancel".equals(action)) return runner.cancel();
+        } catch (Exception e) {
+            return "ERR|plan|" + safe(e.getMessage());
+        }
+        return "ERR|plan|unknown|" + action;
+    }
+
+    /** Osservazione da catalogo inviata dai client (multi-notte nuova o ripresa). */
+    private String cmdObserve(boolean resume, String[] p) {
+        String payload = p.length >= 4 ? joinFrom(p, 3).trim() : "";
+        if (payload.isEmpty()) return "ERR|telescope|missing_arg";
+        String body;
+        if (resume) {
+            // storeId sola oppure JSON {"storeId":"..."}.
+            String storeId = payload;
+            if (payload.startsWith("{")) {
                 try {
-                    // storeId sola oppure JSON {"storeId":"..."}.
-                    if (payload.startsWith("{")) {
-                        body = payload;
-                    } else {
-                        body = new JSONObject().put("storeId", payload).toString();
-                    }
+                    storeId = new JSONObject(payload).optString("storeId", "").trim();
                 } catch (Exception e) {
                     return "ERR|telescope|observeResume|" + safe(e.getMessage());
                 }
-            } else {
-                body = payload;
+                if (storeId.isEmpty()) return "ERR|telescope|missing_arg";
             }
-            Network network = VesperaConnectionService.getActiveNetwork();
-            int port = InstrumentWatchdog.lastApiPort();
-            if (port <= 0) port = 8082;
-            VesperaLocationClient.Site site = VesperaLocationClient.fetch(network);
-            VesperaCommandClient.Result result = VesperaCommandClient.observe(
-                    "10.0.0.1", port, network, site, body, resume);
-            return (result.success ? "OK" : "ERR")
-                    + "|telescope|" + action + "|" + result.httpCode + "|" + safe(result.message);
+            body = SkyCatalog.resumeBody(new SkyCatalog.Session(storeId, "", 0));
+        } else {
+            body = payload;
         }
+        Network network = VesperaConnectionService.getActiveNetwork();
+        int port = InstrumentWatchdog.lastApiPort();
+        if (port <= 0) port = 8082;
+        VesperaLocationClient.Site site = resolveSite(network, null);
+        VesperaCommandClient.Result result = VesperaCommandClient.observe(
+                "10.0.0.1", port, network, site, body, resume);
+        String action = resume ? "observeResume" : "observe";
+        return (result.success ? "OK" : "ERR")
+                + "|telescope|" + action + "|" + result.httpCode + "|" + safe(result.message);
+    }
+
+    /**
+     * Posizione per init/resume/observe: prima quella inviata dal client
+     * ({@code cmd|telescope|init|{"lat":..,"lon":..}}), poi quella di Sistema
+     * dell'Helper, poi l'API del Vespera e infine l'ultimo status letto.
+     */
+    private VesperaLocationClient.Site resolveSite(Network network, String clientJson) {
+        if (clientJson != null && !clientJson.trim().isEmpty()) {
+            try {
+                JSONObject o = new JSONObject(clientJson.trim());
+                double lat = o.optDouble("lat", Double.NaN);
+                double lon = o.optDouble("lon", Double.NaN);
+                if (!Double.isNaN(lat) && !Double.isNaN(lon)
+                        && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+                        && (Math.abs(lat) >= 0.01 || Math.abs(lon) >= 0.01)) {
+                    return new VesperaLocationClient.Site(lat, lon);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        PhotoSyncStore store = PhotoSyncStore.from(app);
+        if (store.hasSite()) {
+            double lat = store.siteLat();
+            double lon = store.siteLon();
+            if (Math.abs(lat) >= 0.01 || Math.abs(lon) >= 0.01) {
+                return new VesperaLocationClient.Site(lat, lon);
+            }
+        }
+        VesperaLocationClient.Site site = VesperaLocationClient.fetch(network);
+        if (site != null) return site;
+        TelescopeStatusHub hub = TelescopeStatusHub.get();
+        return VesperaLocationClient.fromSnapshot(hub == null ? null : hub.lastSnapshot());
+    }
+
+    private String cmdTelescope(String action, String[] p) {
+        if ("observe".equals(action)) return cmdObserve(false, p);
+        if ("observeresume".equals(action)) return cmdObserve(true, p);
         VesperaCommandClient.Command command;
         switch (action) {
             case "park":
@@ -378,7 +439,7 @@ public final class RemoteBridge {
         VesperaLocationClient.Site site = null;
         if (command == VesperaCommandClient.Command.INIT
                 || command == VesperaCommandClient.Command.RESUME) {
-            site = VesperaLocationClient.fetch(network);
+            site = resolveSite(network, p.length >= 4 ? joinFrom(p, 3) : null);
         }
         VesperaCommandClient.Result result =
                 VesperaCommandClient.send("10.0.0.1", port, network, command, site);
@@ -407,25 +468,28 @@ public final class RemoteBridge {
         snap.sunPiShutdown = o.optBoolean("sunPiShutdown", snap.sunPiShutdown);
         store.save(snap);
     }
-
     private void applyTelegramJson(JSONObject o) {
         TelegramSettingsStore store = TelegramSettingsStore.from(app);
         TelegramSettingsStore.Snapshot snap = store.snapshot();
         if (o.has("token")) snap.token = o.optString("token", snap.token);
         if (o.has("chatId")) snap.chatId = o.optString("chatId", snap.chatId);
-        snap.initialized = o.optBoolean("initialized", snap.initialized);
-        snap.shutdown = o.optBoolean("shutdown", snap.shutdown);
-        snap.batteryOffMains = o.optBoolean("batteryOffMains", snap.batteryOffMains);
-        snap.hdHigh = o.optBoolean("hdHigh", snap.hdHigh);
-        snap.connected = o.optBoolean("connected", snap.connected);
-        snap.obsStopped = o.optBoolean("obsStopped", snap.obsStopped);
-        snap.obsStarted = o.optBoolean("obsStarted", snap.obsStarted);
-        snap.error = o.optBoolean("error", snap.error);
-        snap.lost = o.optBoolean("lost", snap.lost);
-        snap.obsFinished = o.optBoolean("obsFinished", snap.obsFinished);
-        snap.sunTooHigh = o.optBoolean("sunTooHigh", snap.sunTooHigh);
-        snap.batteryLow = o.optBoolean("batteryLow", snap.batteryLow);
-        snap.storageInternalHigh = o.optBoolean("storageInternalHigh", snap.storageInternalHigh);
+        if (o.has("enabled")) {
+            snap.setAllEvents(o.optBoolean("enabled"));
+        }
+        if (o.has("initialized")) snap.initialized = o.optBoolean("initialized");
+        if (o.has("shutdown")) snap.shutdown = o.optBoolean("shutdown");
+        if (o.has("batteryOffMains")) snap.batteryOffMains = o.optBoolean("batteryOffMains");
+        if (o.has("hdHigh")) snap.hdHigh = o.optBoolean("hdHigh");
+        if (o.has("connected")) snap.connected = o.optBoolean("connected");
+        if (o.has("obsStopped")) snap.obsStopped = o.optBoolean("obsStopped");
+        if (o.has("obsStarted")) snap.obsStarted = o.optBoolean("obsStarted");
+        if (o.has("error")) snap.error = o.optBoolean("error");
+        if (o.has("lost")) snap.lost = o.optBoolean("lost");
+        if (o.has("obsFinished")) snap.obsFinished = o.optBoolean("obsFinished");
+        if (o.has("sunTooHigh")) snap.sunTooHigh = o.optBoolean("sunTooHigh");
+        if (o.has("batteryLow")) snap.batteryLow = o.optBoolean("batteryLow");
+        if (o.has("storageInternalHigh")) snap.storageInternalHigh = o.optBoolean("storageInternalHigh");
+        if (o.has("rainForecast")) snap.rainForecast = o.optBoolean("rainForecast");
         store.save(snap);
     }
 
@@ -438,9 +502,11 @@ public final class RemoteBridge {
             root.put("wifi", wifiJson());
             root.put("singularity", singularityJson());
             root.put("hd", hdJson());
+            root.put("sync", syncJson());
             root.put("telescope", telescopeJson());
             root.put("system", systemJson());
             root.put("telegram", telegramJson(true));
+            root.put("plan", NightPlanRunner.get(app).stateJson());
             writeFile(new File(filesDir(), STATE), root.toString(2));
         } catch (Exception e) {
             Log.w(TAG, "writeState failed", e);
@@ -457,6 +523,31 @@ public final class RemoteBridge {
         o.put("freq", store.getFrequencyMhz());
         o.put("configured", store.isConfigured());
         o.put("hasNetwork", VesperaConnectionService.getActiveNetwork() != null);
+        // Segnale dello strumento salvato dall'ultima scansione (come la barra della UI Helper).
+        ScanResult seen = null;
+        try {
+            WifiManager wifi = (WifiManager) app.getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+            if (wifi != null && store.isConfigured()) {
+                //noinspection deprecation
+                List<ScanResult> results = wifi.getScanResults();
+                if (results != null) {
+                    for (ScanResult r : results) {
+                        if (store.matchesScan(r)) {
+                            seen = r;
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch (SecurityException ignored) {
+        }
+        o.put("online", seen != null);
+        if (seen != null) {
+            o.put("level", seen.level);
+            o.put("bars", WifiManager.calculateSignalLevel(seen.level, 5) + 1);
+            o.put("scanFreq", seen.frequency);
+        }
         return o;
     }
 
@@ -475,6 +566,44 @@ public final class RemoteBridge {
             o.put("message", snap.message);
         }
         o.put("apiPort", InstrumentWatchdog.lastApiPort());
+        return o;
+    }
+
+    /** Sync foto USER → HD: avanzamento corrente e coda file (Helper ≥ 0.8.37). */
+    private JSONObject syncJson() throws Exception {
+        JSONObject o = new JSONObject();
+        PhotoSyncStore store = PhotoSyncStore.from(app);
+        o.put("running", PhotoSyncService.isSyncRunning());
+        o.put("paused", store.paused());
+        o.put("pauseUntilSchedule", store.pauseUntilSchedule());
+        long now = System.currentTimeMillis();
+        boolean auto = SystemSettingsStore.from(app).photoSync() && !store.paused();
+        o.put("autoSync", auto);
+        o.put("nextAutoAt", auto ? store.nextAutoAt(now) : 0);
+        o.put("lastAt", store.lastAt());
+        o.put("lastOk", store.lastOk());
+        o.put("lastError", nullToEmpty(store.lastError()));
+        o.put("lastSync", nullToEmpty(PhotoSyncService.currentLastSync()));
+        SyncProgress p = PhotoSyncService.currentProgress();
+        if (p != null) {
+            o.put("phase", nullToEmpty(p.phase));
+            o.put("detail", nullToEmpty(p.detail));
+            o.put("fileName", nullToEmpty(p.fileName));
+            o.put("fileIndex", p.fileIndex);
+            o.put("fileTotal", p.fileTotal);
+            o.put("fileBytes", p.fileBytes);
+            o.put("fileSize", p.fileSize);
+            o.put("doneBytes", p.doneBytes);
+            o.put("totalBytes", p.totalBytes);
+            o.put("speedBps", p.speedBps);
+            o.put("etaMs", p.etaMs);
+            o.put("permille", p.permille());
+            o.put("copied", p.copied);
+            o.put("skipped", p.skipped);
+            o.put("deleted", p.deleted);
+            o.put("failed", p.failed);
+        }
+        SyncQueue.putJson(o);
         return o;
     }
 
@@ -507,6 +636,20 @@ public final class RemoteBridge {
         return o;
     }
 
+    /** Posizione impostata in Sistema: i client la leggono come lat/lon del telescopio. */
+    private void putHelperSite(JSONObject o) throws Exception {
+        PhotoSyncStore store = PhotoSyncStore.from(app);
+        if (!store.hasSite()) return;
+        double lat = store.siteLat();
+        double lon = store.siteLon();
+        if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return;
+        if (Math.abs(lat) < 0.01 && Math.abs(lon) < 0.01) return;
+        o.put("latitude", lat);
+        o.put("longitude", lon);
+        o.put("siteLabel", store.siteLabel());
+        o.put("siteSource", store.siteSource());
+    }
+
     private JSONObject telescopeJson() throws Exception {
         JSONObject o = new JSONObject();
         Network network = VesperaConnectionService.getActiveNetwork();
@@ -514,6 +657,7 @@ public final class RemoteBridge {
         if (port <= 0) port = 8082;
         o.put("apiPort", port);
         o.put("host", "10.0.0.1");
+        putHelperSite(o);
         if (network == null) {
             o.put("reachable", false);
             o.put("error", "no_network");
@@ -550,16 +694,129 @@ public final class RemoteBridge {
         o.put("filter", snap.filter);
         o.put("temperature", snap.temperature);
         o.put("focus", snap.focus);
-        o.put("storage", snap.storage);
-        o.put("storageUsedPercent", snap.storageUsedPercent);
+        // Foto interne: il valore FTP (/USER) è quello mostrato dal pannello Helper.
+        refreshStorageIfStale(network, port, snap.model);
+        VesperaInternalStorage.Usage usage = VesperaInternalStorage.lastKnown();
+        o.put("storage", usage != null ? usage.label : snap.storage);
+        o.put("storageUsedPercent", usage != null ? usage.usedPercent : snap.storageUsedPercent);
         o.put("location", snap.location);
+        o.put("instrumentError", snap.error);
+        o.put("arm", snap.armState());
+        o.put("lastTarget", VesperaLastTarget.hasTarget() ? VesperaLastTarget.label() : "");
+        o.put("details", statusDetails(snap, usage));
         o.put("canSignCommands", snap.canSignCommands());
         o.put("isObserving", snap.isObserving());
         o.put("isShuttingDown", snap.isShuttingDown());
         o.put("isSunTooHigh", snap.isSunTooHigh());
         o.put("canResumeObservation", snap.canResumeObservation());
         o.put("isAutoInitRunning", snap.isAutoInitRunning());
+        JSONObject store = SkyCatalog.captureStoreOf(snap.rawJson);
+        if (store != null) o.put("captureStore", store);
         return o;
+    }
+
+    /**
+     * Senza il pannello Helper aperto la memoria interna veniva letta solo durante il tracking:
+     * la rilegge in background, così i client hanno sempre la % (pronta al giro di stato dopo).
+     */
+    private void refreshStorageIfStale(Network network, int apiPort, String model) {
+        long now = SystemClock.elapsedRealtime();
+        long at = VesperaInternalStorage.lastKnownAt();
+        long maxAge = at > 0 ? STORAGE_REFRESH_MS : STORAGE_RETRY_MS;
+        if (at > 0 && now - at < maxAge) return;
+        if (now - lastStorageProbeAt < STORAGE_RETRY_MS && lastStorageProbeAt > 0) return;
+        if (!STORAGE_BUSY.compareAndSet(false, true)) return;
+        lastStorageProbeAt = now;
+        STORAGE_WORKER.execute(() -> {
+            try {
+                VesperaInternalStorage.Usage usage =
+                        VesperaInternalStorage.probe(network, "10.0.0.1", apiPort, model);
+                if (usage != null) TelescopeStatusHub.ensure().ingestInternalStorage(usage.usedPercent);
+            } catch (Exception e) {
+                Log.w(TAG, "storage probe failed", e);
+            } finally {
+                STORAGE_BUSY.set(false);
+            }
+        });
+    }
+
+    /** Stesse righe del pannello Telescopio › Stato dell'Helper, pronte per i client. */
+    private JSONArray statusDetails(VesperaStatusSnapshot snap, VesperaInternalStorage.Usage usage)
+            throws Exception {
+        JSONArray rows = new JSONArray();
+        addDetail(rows, R.string.status_tab_field_model, snap.model);
+        addDetail(rows, R.string.status_tab_field_state, snap.state);
+        addDetail(rows, R.string.status_tab_field_initialized,
+                app.getString(snap.initialized ? R.string.status_tab_yes : R.string.status_tab_no));
+        String obs = "";
+        if ("RUNNING".equals(snap.observationStatus) || snap.isTrackingAcquisition()) {
+            obs = app.getString(R.string.status_tab_observation_running);
+        } else if ("FINISHED".equals(snap.observationStatus)) {
+            obs = app.getString(R.string.status_tab_observation_finished);
+        } else if ("STOPPED".equals(snap.observationStatus) || snap.canResumeObservation()) {
+            obs = app.getString(R.string.status_tab_observation_stopped);
+        }
+        addDetail(rows, R.string.status_tab_field_observation, obs);
+        addDetail(rows, R.string.status_tab_field_operation, snap.operationType);
+        addDetail(rows, R.string.status_tab_field_step, snap.step);
+        int tracking = "ON".equals(snap.tracking) ? R.string.status_tab_tracking_on
+                : "STARTING".equals(snap.tracking) ? R.string.status_tab_tracking_starting
+                : R.string.status_tab_tracking_off;
+        addDetail(rows, R.string.status_tab_field_tracking, app.getString(tracking));
+        String arm = snap.armState();
+        if ("CLOSED".equals(arm)) arm = app.getString(R.string.status_tab_arm_closed);
+        else if ("OPEN".equals(arm)) arm = app.getString(R.string.status_tab_arm_open);
+        else if ("MOVING".equals(arm)) arm = app.getString(R.string.status_tab_arm_moving);
+        else arm = "";
+        addDetail(rows, R.string.status_tab_field_arm, arm);
+        addDetail(rows, R.string.status_tab_field_motors, snap.motors);
+        addDetail(rows, R.string.status_tab_field_focus, snap.focus);
+        if (!snap.targetName.isEmpty()) {
+            addDetail(rows, R.string.status_tab_field_target, snap.targetName);
+        } else if (VesperaLastTarget.hasTarget()) {
+            addDetail(rows, R.string.status_tab_field_last_target, VesperaLastTarget.label());
+        }
+        addDetail(rows, R.string.status_tab_field_coordinates, snap.coordinates);
+        addDetail(rows, R.string.status_tab_field_location, snap.location);
+        if (snap.stackingCount > 0) {
+            addDetail(rows, R.string.status_tab_field_stacking, String.valueOf(snap.stackingCount));
+        }
+        if (snap.exposureMicroSec > 0) {
+            addDetail(rows, R.string.status_tab_field_exposure, String.format(
+                    java.util.Locale.US, "%.1f s", snap.exposureMicroSec / 1_000_000.0));
+        }
+        if (snap.gain > 0) addDetail(rows, R.string.status_tab_field_gain, String.valueOf(snap.gain));
+        addDetail(rows, R.string.status_tab_field_filter, snap.filter);
+        addDetail(rows, R.string.status_tab_field_temperature, snap.temperature);
+        addDetail(rows, R.string.status_tab_field_firmware, snap.firmware);
+        addDetail(rows, R.string.status_tab_field_error, snap.error);
+        int percent = usage != null ? usage.usedPercent : snap.storageUsedPercent;
+        String storage = usage != null ? usage.label : snap.storage;
+        if (storage.isEmpty() && percent >= 0) storage = percent + "%";
+        if (!storage.isEmpty() && percent >= PhotoSyncService.STORAGE_SYNC_PERCENT) {
+            storage = app.getString(R.string.status_tab_storage_full, storage);
+        } else if (storage.isEmpty() && !VesperaInternalStorage.lastError().isEmpty()) {
+            storage = app.getString(R.string.status_tab_storage_ftp_fail,
+                    VesperaInternalStorage.lastError());
+        } else if (storage.isEmpty()) {
+            storage = app.getString(R.string.status_tab_storage_checking);
+        }
+        addDetail(rows, R.string.status_tab_field_storage, storage);
+        if (snap.batteryPercent >= 0) {
+            String battery = snap.batteryPercent + "%";
+            if (!snap.batteryStatus.isEmpty()) battery += " (" + snap.batteryStatus + ")";
+            addDetail(rows, R.string.status_tab_field_battery, battery);
+        }
+        addDetail(rows, R.string.status_tab_field_id, snap.telescopeId);
+        return rows;
+    }
+
+    private void addDetail(JSONArray rows, int labelRes, String value) throws Exception {
+        if (value == null || value.trim().isEmpty()) return;
+        JSONObject row = new JSONObject();
+        row.put("label", app.getString(labelRes));
+        row.put("value", value.trim());
+        rows.put(row);
     }
 
     private JSONObject systemJson() throws Exception {
@@ -594,6 +851,7 @@ public final class RemoteBridge {
         o.put("configured", store.configured());
         o.put("token", maskToken ? (s.token.isEmpty() ? "" : "***") : s.token);
         o.put("chatId", s.chatId);
+        o.put("enabled", s.anyEnabled());
         o.put("initialized", s.initialized);
         o.put("shutdown", s.shutdown);
         o.put("batteryOffMains", s.batteryOffMains);
@@ -607,6 +865,7 @@ public final class RemoteBridge {
         o.put("sunTooHigh", s.sunTooHigh);
         o.put("batteryLow", s.batteryLow);
         o.put("storageInternalHigh", s.storageInternalHigh);
+        o.put("rainForecast", s.rainForecast);
         o.put("lastOkAt", store.lastOkAt());
         o.put("lastError", store.lastError());
         return o;

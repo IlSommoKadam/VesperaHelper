@@ -226,6 +226,15 @@
     <string name="telescope_observe_fail">Osservazione non partita: %1$s</string>
     <string name="telescope_observe_need_wifi">Connetti il Vespera dalla tab Connessioni prima di inviare.</string>
     <string name="telescope_observe_busy">C’è già un comando in corso.</string>
+    <string name="telescope_section_plan">Piano della notte (da Vespera Control)</string>
+    <string name="telescope_plan_none">Nessun piano caricato. Si prepara in Vespera Control: Telescopio › Preferiti › Piano della notte › Carica sull\'Helper.</string>
+    <string name="telescope_plan_cancel">Annulla piano</string>
+    <string name="telescope_plan_cancel_confirm">Annullare il piano? Il telescopio non riceverà più gli oggetti programmati.</string>
+    <string name="telescope_plan_active">attivo</string>
+    <string name="telescope_plan_done">terminato</string>
+    <string name="telescope_plan_steps">Passi (stato):</string>
+    <string name="telescope_plan_periods">Periodi:</string>
+    <string name="telescope_plan_totals">Tempo di osservazione per oggetto:</string>
     <string name="telescope_section_sniff">Comandi Singularity</string>
     <string name="telescope_sniff_hint">Cattura solo le richieste che Singularity manda a questo telescopio (porte 8082 e 8083). Il cloud Vaonis e le altre app non passano di qui. La firma Authorization non viene mostrata. Ferma la cattura a fine prova. Serve vespera-netd.sh aggiornato sul dispositivo.</string>
     <string name="telescope_sniff_start">Cattura comandi</string>
@@ -670,13 +679,15 @@
     <string name="system_weather_log_protect">Protezione meteo</string>
 
     <string name="telegram_tab_title">Notifiche Telegram</string>
-    <string name="telegram_tab_intro">Crea un bot con @BotFather, copia il token, scrivi /start al bot e ottieni il chat ID (es. @userinfobot). Serve internet (Ethernet, VPN o LTE), non solo il Wi‑Fi Vespera. Salva e scegli gli eventi. Un messaggio per transizione, controllo ogni 2 minuti.</string>
+    <string name="telegram_tab_intro">Crea un bot con @BotFather, copia il token, scrivi /start al bot e ottieni il chat ID. Serve internet (Ethernet, VPN o LTE), non solo il Wi‑Fi Vespera. Un interruttore accende o spegne tutte le notifiche.</string>
     <string name="telegram_section_bot">Bot</string>
     <string name="telegram_token_label">Token bot</string>
     <string name="telegram_token_hint">123456:ABC…</string>
     <string name="telegram_chat_label">Chat ID</string>
     <string name="telegram_chat_hint">123456789 o -100…</string>
     <string name="telegram_section_events">Eventi</string>
+    <string name="telegram_enable_all">Notifiche Telegram</string>
+    <string name="telegram_enable_hint">Accende o spegne tutti gli avvisi (osservazione, batteria, sole, pioggia, ecc.).</string>
     <string name="telegram_section_extra">Altri eventi</string>
     <string name="telegram_ev_initialized">Inizializzazione completata (dopo la messa a fuoco)</string>
     <string name="telegram_ev_shutdown">Spegnimento telescopio</string>
@@ -684,7 +695,7 @@
     <string name="telegram_ev_hd">HD USB oltre 80%</string>
     <string name="telegram_ev_connected">Vespera collegato</string>
     <string name="telegram_ev_obs_stopped">Osservazione interrotta</string>
-    <string name="telegram_ev_obs_started">Osservazione iniziata o ripresa (con obiettivo)</string>
+    <string name="telegram_ev_obs_started">Osservazione avviata o ripresa (con obiettivo)</string>
     <string name="telegram_ev_error">Errori telescopio</string>
     <string name="telegram_ev_lost">Connessione persa</string>
     <string name="telegram_ev_obs_finished">Osservazione completata</string>
@@ -712,7 +723,7 @@
     <string name="telegram_msg_battery_low">VesperaHelper: batteria al %1$d%%.</string>
     <string name="telegram_msg_hd">VesperaHelper: HD USB occupato al %1$d%%.</string>
     <string name="telegram_msg_storage">VesperaHelper: storage interno occupato al %1$d%%.</string>
-    <string name="telegram_msg_obs_started">VesperaHelper: osservazione iniziata verso %1$s.</string>
+    <string name="telegram_msg_obs_started">VesperaHelper: osservazione avviata verso %1$s.</string>
     <string name="telegram_msg_obs_resumed">VesperaHelper: osservazione ripresa verso %1$s.</string>
     <string name="telegram_msg_obs_stopped">VesperaHelper: osservazione interrotta (%1$s).</string>
     <string name="telegram_msg_obs_finished">VesperaHelper: osservazione completata (%1$s).</string>

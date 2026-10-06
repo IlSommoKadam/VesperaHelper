@@ -226,6 +226,15 @@
     <string name="telescope_observe_fail">La observación no arrancó: %1$s</string>
     <string name="telescope_observe_need_wifi">Conecta el Vespera desde la pestaña Conexiones antes de enviar.</string>
     <string name="telescope_observe_busy">Ya hay un comando en curso.</string>
+    <string name="telescope_section_plan">Plan de la noche (desde Vespera Control)</string>
+    <string name="telescope_plan_none">Ningún plan cargado. Se prepara en Vespera Control: Telescopio › Favoritos › Plan de la noche › Cargar en Helper.</string>
+    <string name="telescope_plan_cancel">Cancelar plan</string>
+    <string name="telescope_plan_cancel_confirm">¿Cancelar el plan? El telescopio ya no recibirá los objetos programados.</string>
+    <string name="telescope_plan_active">activo</string>
+    <string name="telescope_plan_done">terminado</string>
+    <string name="telescope_plan_steps">Pasos (estado):</string>
+    <string name="telescope_plan_periods">Periodos:</string>
+    <string name="telescope_plan_totals">Tiempo de observación por objeto:</string>
     <string name="telescope_section_sniff">Comandos de Singularity</string>
     <string name="telescope_sniff_hint">Captura solo las peticiones que Singularity envía a este telescopio (puertos 8082 y 8083). La nube de Vaonis y las demás apps no se desvían. La firma Authorization no se muestra. Detén la captura al terminar. Hace falta un vespera-netd.sh actualizado en el dispositivo.</string>
     <string name="telescope_sniff_start">Capturar comandos</string>

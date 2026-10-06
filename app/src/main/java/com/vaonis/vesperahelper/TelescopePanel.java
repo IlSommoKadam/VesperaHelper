@@ -56,6 +56,14 @@ final class TelescopePanel {
     private final TextView commandResult;
     private final TextView sniffStatus;
     private TargetObserveSection observeSection;
+    private TextView planText;
+    private Button planCancel;
+    private final Runnable planRefresh = new Runnable() {
+        @Override public void run() {
+            refreshPlan();
+            if (visible) mainHandler.postDelayed(this, 15_000L);
+        }
+    };
     private final TextView sniffLog;
     private final Button sniffToggle;
     private final TextView lastUpdate;
@@ -199,6 +207,17 @@ final class TelescopePanel {
         });
         layout.addView(observeSection.view());
 
+        layout.addView(section(activity.getString(R.string.telescope_section_plan)));
+        planText = body(activity.getString(R.string.telescope_plan_none));
+        planText.setTextSize(13);
+        planText.setTextIsSelectable(true);
+        layout.addView(planText);
+        planCancel = action(activity.getString(R.string.telescope_plan_cancel), UiStyle.TERRACOTTA);
+        planCancel.setOnClickListener(v -> confirmCancelPlan());
+        planCancel.setVisibility(View.GONE);
+        layout.addView(planCancel);
+        refreshPlan();
+
         layout.addView(section(activity.getString(R.string.telescope_section_sniff)));
         TextView sniffHint = body(activity.getString(R.string.telescope_sniff_hint));
         sniffHint.setTextSize(13);
@@ -254,12 +273,70 @@ final class TelescopePanel {
         refreshStatusNow(true);
         startLive();
         scheduleAutoRefresh();
+        mainHandler.removeCallbacks(planRefresh);
+        mainHandler.post(planRefresh);
     }
 
     void onHidden() {
         visible = false;
         stopLive();
         mainHandler.removeCallbacks(autoRefresh);
+        mainHandler.removeCallbacks(planRefresh);
+    }
+
+    /** Piano caricato da Vespera Control: passi con stato, periodi, tempo per oggetto. */
+    private void refreshPlan() {
+        if (planText == null) return;
+        org.json.JSONObject st = NightPlanRunner.get(activity).stateJson();
+        org.json.JSONArray steps = st.optJSONArray("steps");
+        if (steps == null || steps.length() == 0) {
+            String msg = st.optString("message", "");
+            planText.setText(activity.getString(R.string.telescope_plan_none)
+                    + (msg.isEmpty() ? "" : "\n" + msg));
+            planCancel.setVisibility(View.GONE);
+            return;
+        }
+        java.text.SimpleDateFormat clock = new java.text.SimpleDateFormat("HH:mm", Locale.ITALY);
+        StringBuilder sb = new StringBuilder();
+        sb.append(st.optString("title")).append(" · ").append(activity.getString(st.optBoolean("done")
+                ? R.string.telescope_plan_done : R.string.telescope_plan_active));
+        String msg = st.optString("message", "");
+        if (!msg.isEmpty()) sb.append("\n").append(msg);
+        int current = st.optInt("current", -1);
+        sb.append("\n\n").append(activity.getString(R.string.telescope_plan_steps));
+        for (int i = 0; i < steps.length(); i++) {
+            org.json.JSONObject s = steps.optJSONObject(i);
+            if (s == null) continue;
+            sb.append("\n").append(i == current ? "▶ " : "   ")
+                    .append(clock.format(new Date(s.optLong("start")))).append("–")
+                    .append(clock.format(new Date(s.optLong("end")))).append("  ").append(s.optString("name"));
+            String status = s.optString("status", "");
+            if (!status.isEmpty()) sb.append(" · ").append(status);
+        }
+        org.json.JSONArray lines = st.optJSONArray("lines");
+        if (lines != null && lines.length() > 0) {
+            sb.append("\n\n").append(activity.getString(R.string.telescope_plan_periods));
+            for (int i = 0; i < lines.length(); i++) sb.append("\n   ").append(lines.optString(i));
+        }
+        org.json.JSONArray totals = st.optJSONArray("totals");
+        if (totals != null && totals.length() > 0) {
+            sb.append("\n\n").append(activity.getString(R.string.telescope_plan_totals));
+            for (int i = 0; i < totals.length(); i++) sb.append("\n   ").append(totals.optString(i));
+        }
+        planText.setText(sb);
+        planCancel.setVisibility(st.optBoolean("active") ? View.VISIBLE : View.GONE);
+    }
+
+    private void confirmCancelPlan() {
+        new AlertDialog.Builder(activity)
+                .setTitle(R.string.telescope_plan_cancel)
+                .setMessage(R.string.telescope_plan_cancel_confirm)
+                .setPositiveButton(R.string.telescope_plan_cancel, (d, w) -> {
+                    NightPlanRunner.get(activity).cancel();
+                    refreshPlan();
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 
     void onAppPause() {

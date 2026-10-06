@@ -315,6 +315,16 @@ final class SkyCatalog {
         return xml.substring(a + open.length(), b).trim();
     }
 
+    /** captureStore dallo stato grezzo del Vespera (per i client), o null. */
+    static JSONObject captureStoreOf(String rawJson) {
+        if (rawJson == null || rawJson.isEmpty()) return null;
+        try {
+            return captureStore(new JSONObject(rawJson));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private static JSONObject captureStore(JSONObject root) {
         JSONObject store = root.optJSONObject("captureStore");
         if (store != null) return store;

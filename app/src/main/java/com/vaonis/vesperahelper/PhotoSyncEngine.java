@@ -129,6 +129,7 @@ public final class PhotoSyncEngine {
                 }
             }
             progress.fileTotal = photos.size();
+            SyncQueue.begin(photos);
             progress.totalBytes = totalBytes;
             progress.detail = photos.isEmpty() ? "0" : String.valueOf(photos.size());
             publish(listener, progress);
@@ -158,6 +159,7 @@ public final class PhotoSyncEngine {
                 progress.deleted = deleted;
                 progress.failed = failed;
                 progress.phase = SyncProgress.PHASE_DOWNLOAD;
+                SyncQueue.mark(index - 1, SyncQueue.ACTIVE);
                 publish(listener, progress);
 
                 boolean copiedNow = false;
@@ -174,7 +176,7 @@ public final class PhotoSyncEngine {
                         if (free > 0 && free < remoteSize + 1_048_576L) {
                             failed++;
                             progress.failed = failed;
-                            tracked.put(entry.path, fileLine(entry, remoteSize, "failed"));
+                            track(tracked, index, entry, remoteSize, "failed");
                             Log.w(TAG, "not enough space for " + entry.path);
                             continue;
                         }
@@ -194,7 +196,7 @@ public final class PhotoSyncEngine {
                         if (!local.isFile() || local.length() != expect) {
                             failed++;
                             progress.failed = failed;
-                            tracked.put(entry.path, fileLine(entry, expect, "failed"));
+                            track(tracked, index, entry, expect, "failed");
                             Log.w(TAG, "size mismatch " + entry.path + " local="
                                     + (local.exists() ? local.length() : -1) + " remote=" + expect);
                             if (local.exists()) {
@@ -222,7 +224,7 @@ public final class PhotoSyncEngine {
                         }
                         failed++;
                         progress.failed = failed;
-                        tracked.put(entry.path, fileLine(entry, remoteSize, "failed"));
+                        track(tracked, index, entry, remoteSize, "failed");
                         Log.w(TAG, "sync " + entry.path, failureEx);
                         continue;
                     }
@@ -234,7 +236,7 @@ public final class PhotoSyncEngine {
                 if (!syncFileToDisk(local)) {
                     failed++;
                     progress.failed = failed;
-                    tracked.put(entry.path, fileLine(entry, local.length(), "failed"));
+                    track(tracked, index, entry, local.length(), "failed");
                     Log.w(TAG, "disk sync fail " + entry.path);
                     continue;
                 }
@@ -247,7 +249,7 @@ public final class PhotoSyncEngine {
                 if (localSize < 0 || (remoteSize > 0 && localSize != remoteSize)) {
                     failed++;
                     progress.failed = failed;
-                    tracked.put(entry.path, fileLine(entry, remoteSize, "failed"));
+                    track(tracked, index, entry, remoteSize, "failed");
                     Log.w(TAG, "verify fail " + entry.path + " local="
                             + localSize + " remote=" + remoteSize);
                     if (local.exists() && remoteSize > 0 && localSize != remoteSize) {
@@ -265,7 +267,7 @@ public final class PhotoSyncEngine {
                     progress.deleted = deleted;
                 }
                 long trackedSize = remoteSize > 0 ? remoteSize : Math.max(0, localSize);
-                tracked.put(entry.path, fileLine(entry, trackedSize, copiedNow ? "copied" : "skipped"));
+                track(tracked, index, entry, trackedSize, copiedNow ? "copied" : "skipped");
                 publish(listener, progress);
             }
 
@@ -294,6 +296,7 @@ public final class PhotoSyncEngine {
             if (isPaused(pause) || "paused".equals(failure.getMessage())) {
                 return pauseResult(progress, listener);
             }
+            SyncQueue.releaseActive();
             progress.phase = SyncProgress.PHASE_ERROR;
             progress.detail = failure.getMessage() == null
                     ? failure.getClass().getSimpleName() : failure.getMessage();
@@ -329,6 +332,7 @@ public final class PhotoSyncEngine {
     private static Result pauseResult(SyncProgress progress, Listener listener) {
         progress.phase = SyncProgress.PHASE_PAUSED;
         progress.active = false;
+        SyncQueue.releaseActive();
         publish(listener, progress);
         return Result.error("paused");
     }
@@ -495,6 +499,12 @@ public final class PhotoSyncEngine {
             Log.w(TAG, "delete " + path, failure);
             return false;
         }
+    }
+
+    private static void track(java.util.Map<String, FileLine> tracked, int index,
+                              CommonsFtpClient.Entry entry, long size, String kind) {
+        tracked.put(entry.path, fileLine(entry, size, kind));
+        SyncQueue.mark(index - 1, kind);
     }
 
     private static FileLine fileLine(CommonsFtpClient.Entry entry, long size, String kind) {

@@ -15,6 +15,7 @@ final class VesperaInternalStorage {
     private static final Object LOCK = new Object();
     private static final long GB = 1024L * 1024L * 1024L;
     private static volatile Usage lastUsage;
+    private static volatile long lastUsageAt;
     private static volatile String lastError = "";
     private static final String[] EXTRA_PATHS = {
             "/v1/device/status",
@@ -38,6 +39,11 @@ final class VesperaInternalStorage {
         return lastUsage;
     }
 
+    /** elapsedRealtime dell'ultima lettura riuscita (0 = mai). */
+    static long lastKnownAt() {
+        return lastUsageAt;
+    }
+
     static String lastError() {
         return lastError == null ? "" : lastError;
     }
@@ -49,12 +55,14 @@ final class VesperaInternalStorage {
             if (ftp != null) {
                 lastError = "";
                 lastUsage = ftp;
+                lastUsageAt = android.os.SystemClock.elapsedRealtime();
                 return ftp;
             }
             Usage rest = fromRest(network, host, apiPort);
             if (rest != null && rest.usedPercent >= 0 && !rest.label.isEmpty()) {
                 lastError = "";
                 lastUsage = rest;
+                lastUsageAt = android.os.SystemClock.elapsedRealtime();
                 return rest;
             }
             return lastUsage;

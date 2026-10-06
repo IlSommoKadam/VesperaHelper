@@ -34,6 +34,12 @@ final class TelescopeStatusHub {
     private long lastSnapAt;
     private boolean baselineReady;
     private String lastObs = "";
+    /** Target of the observation when it went STOPPED (for start vs resume). */
+    private String stoppedTarget = "";
+    /** Intent of the last start/resume command sent by the Helper: 1 start, 2 resume. */
+    private int pendingRunIntent;
+    private long pendingRunIntentAt;
+    private static final long RUN_INTENT_TTL_MS = 15L * 60L * 1000L;
     private boolean lastInitialized;
     private boolean lastInitOk;
     private boolean lastOnMains;
@@ -70,6 +76,19 @@ final class TelescopeStatusHub {
     static TelescopeStatusHub get() {
         synchronized (INSTANCE_LOCK) {
             return instance;
+        }
+    }
+
+    /**
+     * Called before sending an observation command: {@code resume=false} for a
+     * new observation, {@code true} for resume / multi-night continue. The next
+     * RUNNING is then notified as "avviata" or "ripresa" accordingly.
+     */
+    static void noteRunIntent(boolean resume) {
+        TelescopeStatusHub hub = ensure();
+        synchronized (hub.stateLock) {
+            hub.pendingRunIntent = resume ? 2 : 1;
+            hub.pendingRunIntentAt = System.currentTimeMillis();
         }
     }
 
@@ -160,6 +179,7 @@ final class TelescopeStatusHub {
         lastSnap = null;
         lastSnapAt = 0;
         lastObs = "";
+        stoppedTarget = "";
         lastInitialized = false;
         lastInitOk = false;
         lastOnMains = false;
@@ -206,6 +226,21 @@ final class TelescopeStatusHub {
         Log.i(TAG, "baseline obs=" + lastObs + " init=" + lastInitialized
                 + " finishedInit=" + lastFinishedInitId
                 + " storage=" + lastStoragePercent);
+    }
+
+    /**
+     * "Ripresa" only when it really continues: a resume command sent by the
+     * Helper, or (without a recent command) STOPPED -> RUNNING on the same
+     * target that was stopped. Anything else is a new observation.
+     */
+    private boolean isResumeLocked(VesperaStatusSnapshot snap) {
+        if (pendingRunIntent != 0
+                && System.currentTimeMillis() - pendingRunIntentAt <= RUN_INTENT_TTL_MS) {
+            return pendingRunIntent == 2;
+        }
+        if (!"STOPPED".equals(lastObs) || stoppedTarget.isEmpty()) return false;
+        String target = TelescopeStatusEvent.targetOf(snap);
+        return target.trim().equalsIgnoreCase(stoppedTarget.trim());
     }
 
     private void diffSnapshotLocked(VesperaStatusSnapshot snap, List<TelescopeStatusEvent> events) {
@@ -259,11 +294,14 @@ final class TelescopeStatusHub {
         String obs = snap.observationStatus == null ? "" : snap.observationStatus;
         if (!obs.equals(lastObs)) {
             if ("RUNNING".equals(obs)) {
-                TelescopeStatusEvent.Kind kind = "STOPPED".equals(lastObs)
+                TelescopeStatusEvent.Kind kind = isResumeLocked(snap)
                         ? TelescopeStatusEvent.Kind.OBS_RESUMED
                         : TelescopeStatusEvent.Kind.OBS_STARTED;
+                pendingRunIntent = 0;
+                stoppedTarget = "";
                 events.add(TelescopeStatusEvent.of(kind, snap));
             } else if ("RUNNING".equals(lastObs) && "STOPPED".equals(obs)) {
+                stoppedTarget = TelescopeStatusEvent.targetOf(snap);
                 events.add(TelescopeStatusEvent.of(TelescopeStatusEvent.Kind.OBS_STOPPED, snap));
             } else if ("RUNNING".equals(lastObs) && "FINISHED".equals(obs)) {
                 events.add(TelescopeStatusEvent.of(TelescopeStatusEvent.Kind.OBS_FINISHED, snap));
