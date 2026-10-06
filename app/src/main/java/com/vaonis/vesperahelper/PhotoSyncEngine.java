@@ -164,6 +164,7 @@ public final class PhotoSyncEngine {
 
                 boolean copiedNow = false;
                 if (local.exists() && local.isFile() && remoteSize > 0 && local.length() == remoteSize) {
+                    if (needsOriginalTime(local, entry)) keepOriginalTime(ftp, entry, local);
                     skipped++;
                     progress.skipped = skipped;
                     progress.doneBytes += remoteSize;
@@ -205,6 +206,7 @@ public final class PhotoSyncEngine {
                             }
                             continue;
                         }
+                        keepOriginalTime(ftp, entry, local);
                         copiedNow = true;
                         downloaded++;
                         bytes += local.length();
@@ -488,6 +490,35 @@ public final class PhotoSyncEngine {
             return Os.stat(file.getAbsolutePath()).st_size;
         } catch (ErrnoException ignored) {
             return file.isFile() ? file.length() : -1;
+        }
+    }
+
+    /**
+     * Copia già presente: va riallineata se la sua ora non coincide con quella del Vespera.
+     * Il LIST non ha fuso orario (può essere spostato di ore intere rispetto a MDTM/UTC),
+     * quindi si considera allineata una differenza di ore intere ±2 min.
+     */
+    private static boolean needsOriginalTime(File local, CommonsFtpClient.Entry entry) {
+        if (entry.timeMs <= 0L || !isStackOutput(entry.name)) return false;
+        long hour = 3_600_000L;
+        long rest = Math.abs(local.lastModified() - entry.timeMs) % hour;
+        return rest > 120_000L && rest < hour - 120_000L;
+    }
+
+    /** Solo gli stack *-output.jpg servono all'anteprima: pochi file, la copia non rallenta. */
+    private static boolean isStackOutput(String name) {
+        String low = name == null ? "" : name.toLowerCase(java.util.Locale.US);
+        return low.endsWith("-output.jpg") || low.endsWith("-output.jpeg");
+    }
+
+    /** Stack copiato sull'HD con l'ora originale del file sul Vespera (MDTM, poi LIST). */
+    private static void keepOriginalTime(CommonsFtpClient ftp, CommonsFtpClient.Entry entry, File local) {
+        if (!isStackOutput(entry.name)) return;
+        long timeMs = ftp.modificationTime(entry.path);
+        if (timeMs <= 0L) timeMs = entry.timeMs;
+        if (timeMs <= 0L) return;
+        if (!local.setLastModified(timeMs)) {
+            Log.w(TAG, "setLastModified " + local);
         }
     }
 

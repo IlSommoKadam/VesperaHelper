@@ -34,12 +34,38 @@ final class CommonsFtpClient implements Closeable {
         final String name;
         final boolean directory;
         final long size;
+        /** Ora del file sul Vespera (ms epoch) dal LIST, 0 se ignota. */
+        final long timeMs;
 
         Entry(String path, String name, boolean directory, long size) {
+            this(path, name, directory, size, 0L);
+        }
+
+        Entry(String path, String name, boolean directory, long size, long timeMs) {
             this.path = path;
             this.name = name;
             this.directory = directory;
             this.size = size;
+            this.timeMs = Math.max(0L, timeMs);
+        }
+    }
+
+    /** Ora esatta del file remoto via MDTM (ms epoch, UTC), 0 se non disponibile. */
+    long modificationTime(String path) {
+        try {
+            ensureFtp();
+            String raw = ftp.getModificationTime(path);
+            if (raw == null) return 0L;
+            raw = raw.trim();
+            int space = raw.lastIndexOf(' ');
+            if (space >= 0) raw = raw.substring(space + 1);
+            if (raw.length() < 14) return 0L;
+            java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US);
+            fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            java.util.Date when = fmt.parse(raw.substring(0, 14));
+            return when == null ? 0L : when.getTime();
+        } catch (Exception ignored) {
+            return 0L;
         }
     }
 
@@ -263,7 +289,8 @@ final class CommonsFtpClient implements Closeable {
             if (file.isDirectory() || shouldTreatAsDirectory(file, name, path)) {
                 subdirs.add(path);
             } else {
-                files.add(new Entry(path, name, false, file.getSize()));
+                long timeMs = file.getTimestamp() == null ? 0L : file.getTimestamp().getTimeInMillis();
+                files.add(new Entry(path, name, false, file.getSize(), timeMs));
             }
         }
         Log.i(TAG, "LIST " + dir + " files=" + listed.length + " total=" + files.size());
