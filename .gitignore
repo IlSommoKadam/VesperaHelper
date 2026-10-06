@@ -28,3 +28,7 @@ google-services.json
 
 # Logs
 *.log
+
+# Archivi temporanei
+*.tgz
+_to_delete/

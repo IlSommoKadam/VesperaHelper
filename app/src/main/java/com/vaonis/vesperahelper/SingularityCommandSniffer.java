@@ -6,6 +6,7 @@ import android.util.Log;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -16,6 +17,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -42,6 +44,10 @@ final class SingularityCommandSniffer {
     private static final int MAX_LINES = 60;
     private static final int MAX_BODY = 4000;
     private static final long ACK_TIMEOUT_MS = 12_000L;
+    /** Persistent copy of the sniff log, pullable via ADB next to remote.*. */
+    static final String LOG_FILE = "sniff.log";
+    private static final String LOG_FILE_OLD = "sniff.log.1";
+    private static final long LOG_MAX_BYTES = 1024L * 1024L;
 
     interface Ui {
         void onState(boolean running, String code);
@@ -49,6 +55,8 @@ final class SingularityCommandSniffer {
     }
 
     private static final ExecutorService pool = Executors.newCachedThreadPool();
+    private static final ExecutorService fileWriter = Executors.newSingleThreadExecutor();
+    private static volatile Context appContext;
     private static final Object logLock = new Object();
     private static final List<String> lines = new ArrayList<>();
     private static final AtomicBoolean running = new AtomicBoolean(false);
@@ -84,6 +92,7 @@ final class SingularityCommandSniffer {
     static void start(Context context, String telescopeHost, Network vesperaNetwork) {
         if (!busy.compareAndSet(false, true)) return;
         Context app = context.getApplicationContext();
+        appContext = app;
         host = telescopeHost == null || telescopeHost.isEmpty() ? "10.0.0.1" : telescopeHost;
         network = vesperaNetwork;
         pool.execute(() -> {
@@ -103,6 +112,7 @@ final class SingularityCommandSniffer {
                 }
                 String ack = pollAck(app, before, previous);
                 if (ack.startsWith("sniff-on")) {
+                    appendFile("=== sniff ON  host=" + host + " ===");
                     running.set(true);
                     expectOff = false;
                     notifyState(true, "on");
@@ -129,6 +139,7 @@ final class SingularityCommandSniffer {
                 VesperaConnectionService.writeSniffRequest(app, "sniff-off");
                 pollAck(app, before, previous);
                 closeServers();
+                appendFile("=== sniff OFF ===");
                 notifyState(false, "off");
             } finally {
                 busy.set(false);
@@ -306,7 +317,32 @@ final class SingularityCommandSniffer {
             lines.add(stamp + "  " + entry);
             while (lines.size() > MAX_LINES) lines.remove(0);
         }
+        appendFile(entry);
         notifyLog();
+    }
+
+    /** Appends one entry (full date) to files/sniff.log, rotating at 1 MB. */
+    private static void appendFile(String entry) {
+        Context app = appContext;
+        if (app == null || entry == null) return;
+        String stamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date());
+        String record = stamp + "  " + entry.replace("\n", "\n    ") + "\n";
+        fileWriter.execute(() -> {
+            File dir = app.getExternalFilesDir(null);
+            if (dir == null) dir = app.getFilesDir();
+            if (dir == null) return;
+            File log = new File(dir, LOG_FILE);
+            if (log.length() > LOG_MAX_BYTES) {
+                File old = new File(dir, LOG_FILE_OLD);
+                if (old.exists() && !old.delete()) Log.w(TAG, "cannot delete " + old);
+                if (!log.renameTo(old)) Log.w(TAG, "cannot rotate " + log);
+            }
+            try (FileOutputStream out = new FileOutputStream(log, true)) {
+                out.write(record.getBytes(StandardCharsets.UTF_8));
+            } catch (IOException failure) {
+                Log.w(TAG, "sniff.log: " + failure.getMessage());
+            }
+        });
     }
 
     private static String logText() {

@@ -52,6 +52,7 @@ final class VesperaCommandClient {
 
     static Result send(String host, int apiPort, Network network, Command command,
             VesperaLocationClient.Site initSite) {
+        if (command == Command.RESUME) TelescopeStatusHub.noteRunIntent(true);
         if (host == null || host.isEmpty()) host = "10.0.0.1";
         int port = apiPort > 0 ? apiPort : 8082;
         if (port == 8083) port = 8082;
@@ -456,6 +457,7 @@ final class VesperaCommandClient {
      */
     static Result observe(String host, int apiPort, Network network,
             VesperaLocationClient.Site initSite, String body, boolean storedCapture) {
+        TelescopeStatusHub.noteRunIntent(storedCapture);
         if (host == null || host.isEmpty()) host = "10.0.0.1";
         int port = apiPort > 0 ? apiPort : 8082;
         if (port == 8083) port = 8082;

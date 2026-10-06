@@ -132,7 +132,7 @@ public final class PhotoSyncService extends Service {
     private String lastSync = "";
     private String message = "";
     private int fileCount;
-    private boolean syncing;
+    private volatile boolean syncing;
     /** True after Copia ora / Continua until maybeAutoSync takes the lock. */
     private volatile boolean pendingForceSync;
     private boolean userUnmounted;
@@ -145,7 +145,9 @@ public final class PhotoSyncService extends Service {
     /** One-shot launch power-off; further ensure()/BOOTSTRAP must not re-eject after Attiva HD. */
     private boolean hdLaunchPowerOffDone;
     private long lastNotifyAt;
-    private SyncProgress lastProgress;
+    private volatile SyncProgress lastProgress;
+    /** Istanza viva, per lo stato sync esposto da {@link RemoteBridge}. */
+    private static volatile PhotoSyncService current;
     private String lastBroadcastPhase = "";
     private volatile long extraAutoDelayMs;
     private long lastStorageSyncAt;
@@ -249,6 +251,22 @@ public final class PhotoSyncService extends Service {
         mainHandler.postDelayed(this, TICK_MS);
         }
     };
+
+    /** Ultimo avanzamento sync (null se il servizio non gira o non ha mai sincronizzato). */
+    static SyncProgress currentProgress() {
+        PhotoSyncService s = current;
+        return s == null ? null : s.lastProgress;
+    }
+
+    static boolean isSyncRunning() {
+        PhotoSyncService s = current;
+        return s != null && s.isCopyUiActive();
+    }
+
+    static String currentLastSync() {
+        PhotoSyncService s = current;
+        return s == null ? "" : s.lastSync;
+    }
 
     public static void ensure(Context context) {
         context.startForegroundService(new Intent(context, PhotoSyncService.class)
@@ -362,6 +380,7 @@ public final class PhotoSyncService extends Service {
         ftpStatus = localized.getString(R.string.photos_ftp_off);
         syncStatus = localized.getString(R.string.photos_sync_idle);
         hud = new SyncProgressHud(this);
+        current = this;
         startAsForeground();
         statusHub = TelescopeStatusHub.ensure();
         telegramNotifier = new TelegramNotifier(this);
@@ -2579,6 +2598,7 @@ public final class PhotoSyncService extends Service {
     }
 
     @Override public void onDestroy() {
+        if (current == this) current = null;
         boolean resume = syncing || shouldResume();
         if (resume && syncStore != null) syncStore.markInterrupted(this);
         mainHandler.removeCallbacks(tick);
