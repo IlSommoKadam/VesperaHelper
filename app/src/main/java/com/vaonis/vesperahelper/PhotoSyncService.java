@@ -546,11 +546,18 @@ public final class PhotoSyncService extends Service {
 
     private void startAsForeground() {
         Notification notification = notification();
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIFICATION_ID, notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
+        // connectedDevice (Vespera Wi-Fi + USB HD), not dataSync: Android 15
+        // caps dataSync at 6 h/day, then every start threw and the Helper
+        // crash-looped while it runs 24/7.
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(NOTIFICATION_ID, notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (RuntimeException refused) {
+            Log.w(TAG, "startForeground refused: " + refused);
         }
     }
 

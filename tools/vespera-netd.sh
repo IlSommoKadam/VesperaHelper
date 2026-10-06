@@ -353,18 +353,31 @@ photos_dir() {
   fi
 }
 
-# True if path is a mountpoint (exact /proc/mounts field 2, plus sdcard pass-through).
+# Source of the topmost mount at path (last /proc/mounts entry), "" if none.
+mount_src_at() {
+  awk -v p="$1" '$2 == p { src=$1 } END { print src }' /proc/mounts 2>/dev/null
+}
+
+# True if the topmost mount at path is block device $2.
+dev_at_path() {
+  src=$(mount_src_at "$1")
+  [ -n "$src" ] && [ -n "$2" ] && [ "$(basename "$src")" = "$(basename "$2")" ]
+}
+
+# True if path is a mountpoint whose topmost mount is a block device (USB HD),
+# plus sdcard pass-through. A bind of the bare /mnt/vespera-hd dir is tmpfs:
+# photos written there land in RAM, so it must not count as mounted.
 path_mounted() {
   p="$1"
   [ -n "$p" ] || return 1
-  awk -v p="$p" '$2 == p { found=1 } END { exit found ? 0 : 1 }' /proc/mounts && return 0
+  case "$(mount_src_at "$p")" in /dev/block/*|/dev/sd*) return 0 ;; esac
   case "$p" in
     /data/media/0/*)
       alt="/mnt/pass_through/0/emulated/0/${p#/data/media/0/}"
-      awk -v p="$alt" '$2 == p { found=1 } END { exit found ? 0 : 1 }' /proc/mounts
+      case "$(mount_src_at "$alt")" in /dev/block/*|/dev/sd*) return 0 ;; esac
       ;;
-    *) return 1 ;;
   esac
+  return 1
 }
 
 # Re-bind HD into the app-visible folder when /mnt/vespera-hd is up but the
@@ -392,6 +405,8 @@ ensure_photos_bind() {
     return 1
   fi
   umount "$bind" 2>/dev/null
+  # A stray tmpfs layer over a live HD bind: dropping it uncovered the HD.
+  path_mounted "$bind" && return 0
   if mount --bind "$HD_REAL" "$bind"; then
     chmod 777 "$bind" 2>/dev/null
     mkdir -p "$bind/USER" 2>/dev/null
@@ -578,6 +593,28 @@ clear_hd_state() {
   rm -f "$HD_STATE"
 }
 
+# The HD is already the topmost mount on $bind (globals from mount_disk):
+# keep it, make sure /mnt/vespera-hd shows it too, and report mounted.
+adopt_bound_hd() {
+  if ! dev_at_path "$HD_MOUNT" "$dev"; then
+    umount "$HD_MOUNT" 2>/dev/null
+    mount --bind "$bind" "$HD_MOUNT" 2>/dev/null
+  fi
+  target="$HD_MOUNT"
+  dev_at_path "$HD_MOUNT" "$dev" || target="$bind"
+  owned=$(grep '^OWNED=' "$HD_STATE" 2>/dev/null | cut -d= -f2)
+  [ -z "$owned" ] && owned=1
+  mkdir -p "$bind/USER" 2>/dev/null
+  touch "$bind/.nomedia" 2>/dev/null
+  chmod 777 "$bind" "$bind/USER" 2>/dev/null
+  [ -z "$uuid" ] && uuid="-"
+  [ -z "$label" ] && label="-"
+  save_hd_state "$dev" "$uuid" "$label" "$target" "$bind" "$owned"
+  save_hd_usb "$(usb_parent_of_block "$dev")"
+  write_mount_ack "mounted|$uuid|$label|$dev|$bind"
+  write_ack "mount-ok $dev $bind (already)"
+}
+
 mount_disk() {
   spec="$1"
   if [ -z "$spec" ]; then
@@ -602,7 +639,30 @@ mount_disk() {
   fstype=$(blkid_field "$dev" TYPE)
   bind=$(photos_dir)
   mkdir -p "$HD_MOUNT" "$bind" 2>/dev/null
+
+  # HD already bound for the app (e.g. the app asks mount while a sync is
+  # writing): keep it. Tearing it down failed on the busy bind but still
+  # unmounted /mnt/vespera-hd, and the empty tmpfs dir was then bound over
+  # the HD — photos went to RAM and were deleted from the telescope.
+  if dev_at_path "$bind" "$dev"; then
+    adopt_bound_hd
+    return 0
+  fi
+  # Drop whatever sits on the bind (stale bind, or a tmpfs layer over the HD).
   umount "$bind" 2>/dev/null
+  if dev_at_path "$bind" "$dev"; then
+    adopt_bound_hd
+    return 0
+  fi
+  if [ -n "$(mount_src_at "$bind")" ]; then
+    umount "$bind" 2>/dev/null
+    if [ -n "$(mount_src_at "$bind")" ]; then
+      # Still busy: a bind on top would hide the files being written.
+      write_mount_ack "mount-busy $dev $bind"
+      write_ack "mount-busy $dev $bind"
+      return 1
+    fi
+  fi
   umount "$HD_MOUNT" 2>/dev/null
 
   owned=0
@@ -632,6 +692,12 @@ mount_disk() {
   fi
 
   if [ "$target" != "$bind" ]; then
+    # Never bind a bare directory: under /mnt it is tmpfs (RAM).
+    if ! dev_at_path "$target" "$dev"; then
+      write_mount_ack "mount-fail $dev $target-not-mounted"
+      write_ack "mount-fail $dev $target-not-mounted"
+      return 1
+    fi
     umount "$bind" 2>/dev/null
     if ! mount --bind "$target" "$bind"; then
       write_mount_ack "mount-bind-fail $dev $bind"

@@ -110,6 +110,7 @@ L'app mantiene una richiesta Wi-Fi generica e chiede al daemon root `tools/vespe
 | 0.8.17 | 175 | Sync mattutina separata dallo spegnimento: telescopio/Pi solo se observation/plan terminati con GENERAL.SUN_TOO_HIGH (no init/orologio) |
 | 0.8.38 | 196 | RemoteBridge: check Singularity in background per i client remoti |
 | 0.8.39 | 197 | RemoteBridge: `observeResume` accetta anche JSON `{"storeId":"..."}` (PR #6) |
+| 0.8.42 | 200 | Sync foto: mai su RAM. HD "montato" solo se il mount in cima alla cartella foto è un block device (non tmpfs); la sync si ferma senza cancellare dal telescopio se l'HD cade (`hd-lost`/`hd-ram`). Daemon: `mount-disk` con HD già montato non smonta più `/mnt/vespera-hd` (prima legava la dir tmpfs vuota sopra l'HD). PhotoSyncService come FGS `connectedDevice`: `dataSync` ha il limite di 6 h/giorno su Android 15 e mandava l'Helper in crash loop |
 
 Il daemon deve essere avviato come root sul Pi dopo il boot; l'app comunica con esso tramite `net.req` / `disk.req` nella propria directory esterna. Comandi Ethernet su `net.req`: `eth-status`, `eth-dhcp`, `eth-static|ip|prefix|gw|dns1|dns2` (ack su `net.ack`).
 

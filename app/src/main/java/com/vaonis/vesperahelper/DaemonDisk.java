@@ -8,11 +8,15 @@ import android.system.Os;
 import android.system.StructStat;
 import android.util.Log;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /** Talks to {@code vespera-netd.sh} for USB disk list / mount / unmount. */
 public final class DaemonDisk {
@@ -126,6 +130,11 @@ public final class DaemonDisk {
 
     private static boolean looksLikeMountedPhotos(File dir) {
         if (dir == null || !dir.isDirectory()) return false;
+        // The mount table is authoritative: a bind of the bare /mnt/vespera-hd
+        // dir is tmpfs (RAM) and differs in st_dev too, so it fooled the
+        // checks below — photos went to RAM and StatFs showed it ~full.
+        Boolean block = photosMountIsBlock();
+        if (block != null) return block;
         File parent = dir.getParentFile();
         if (parent != null) {
             try {
@@ -142,6 +151,33 @@ public final class DaemonDisk {
             if (kids != null && kids.length > 0) return true;
         }
         return new File(dir, "$RECYCLE.BIN").isDirectory();
+    }
+
+    /**
+     * Whether the topmost mount on the photos folder (any alias: /data/media,
+     * pass_through, /storage) is a block device. {@code null} when the app's
+     * mount table has no entry for it.
+     */
+    static Boolean photosMountIsBlock() {
+        String suffix = "/" + BuildConfig.APPLICATION_ID + "/files/vespera-photos";
+        // mountpoint -> source of the last (topmost) entry
+        Map<String, String> top = new HashMap<>();
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(
+                new FileInputStream("/proc/self/mounts"), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = in.readLine()) != null) {
+                String[] f = line.split(" ");
+                if (f.length < 3 || !f[1].endsWith(suffix)) continue;
+                top.put(f[1], "tmpfs".equals(f[2]) ? "tmpfs" : f[0]);
+            }
+        } catch (IOException ignored) {
+            return null;
+        }
+        if (top.isEmpty()) return null;
+        for (String source : top.values()) {
+            if (source.startsWith("/dev/block/") || source.startsWith("/dev/sd")) return true;
+        }
+        return false;
     }
 
     public static MountStatus ensureBind(Context context) {

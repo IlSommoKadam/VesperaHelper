@@ -93,6 +93,12 @@ public final class PhotoSyncEngine {
         if (localRoot == null || !localRoot.isDirectory()) {
             return Result.error("hd-unmounted");
         }
+        if (Boolean.FALSE.equals(DaemonDisk.photosMountIsBlock())) {
+            return Result.error("hd-ram");
+        }
+        // Started on the USB HD: if it drops mid-sync, stop before any more
+        // telescope deletes (the folder may fall back to RAM or internal).
+        final boolean startedOnHd = DaemonDisk.isPhotosBoundLive(localRoot);
         File userDir = resolveOrCreateLocalUser(localRoot);
         if (userDir == null) {
             return Result.error("local-user");
@@ -145,6 +151,10 @@ public final class PhotoSyncEngine {
             int index = 0;
             for (CommonsFtpClient.Entry entry : photos) {
                 if (isPaused(pause)) return pauseResult(progress, listener);
+                if (startedOnHd && !DaemonDisk.isPhotosBoundLive(localRoot)) {
+                    Log.w(TAG, "HD lost mid-sync — stop, telescope copies kept");
+                    return Result.error("hd-lost");
+                }
                 index++;
                 String relative = relativeUserPath(entry.path);
                 File local = new File(userDir, relative);
@@ -262,6 +272,10 @@ public final class PhotoSyncEngine {
                 }
 
                 if (isPaused(pause)) return pauseResult(progress, listener);
+                if (startedOnHd && !DaemonDisk.isPhotosBoundLive(localRoot)) {
+                    Log.w(TAG, "HD lost before delete of " + entry.path);
+                    return Result.error("hd-lost");
+                }
                 progress.phase = SyncProgress.PHASE_DELETE;
                 publish(listener, progress);
                 if (deleteRemote(ftp, entry.path)) {
